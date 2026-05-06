@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * npm install -g 后自动安装 skill 到所有已检测的 AI 编码工具
+ * Auto-install skill into all detected AI coding agents after npm install -g
  */
 
 import { cpSync, existsSync, mkdirSync } from 'node:fs';

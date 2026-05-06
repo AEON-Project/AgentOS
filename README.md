@@ -1,17 +1,17 @@
 # AEON AgentOS
 
-AEON AgentOS 是一个面向 AI Agent 的平台级执行系统，连接技能调用、任务执行、授权支付与结算网络。它让 Agent 不只是理解用户意图，而是可以在用户授权范围内调用不同的技能，并通过 wallet、Card 等支付能力完成真实世界的服务购买、内容生成、数据调用、订阅、预订和交易执行。
+AEON AgentOS is a platform-level execution system for AI Agents. It connects skill invocation, task execution, authorized payment and settlement networks — enabling Agents to not only understand user intent, but to call different skills within the user's authorization scope and complete real-world purchases, content generation, data calls, subscriptions, bookings and transaction execution via wallet and Card payment capabilities.
 
-**当前开放技能**：AI 图片生成 — 通过 [x402 协议](https://www.x402.org/)，以 USDT（BSC）按次付费生成 AI 图片。
+**Currently open skill**: AI image generation — generate images from a text prompt, paying per request with USDT on BSC via the [x402 protocol](https://www.x402.org/).
 
 ## Install Skill
 
 ```bash
 # Install to all detected agents (Claude Code, Cursor, Codex, OpenClaw, Gemini CLI, etc.)
-npx skills add AEON-Project/agentos -g -y
+npx skills add AEON-Project/AgentOS -g -y
 
 # Install to specific agents
-npx skills add AEON-Project/agentos -a claude-code -a cursor -a codex -g -y
+npx skills add AEON-Project/AgentOS -a claude-code -a cursor -a codex -g -y
 ```
 
 Supported agents: Claude Code, Cursor, Codex, OpenClaw, Gemini CLI, GitHub Copilot, Windsurf, Roo Code, and [39+ more](https://agentskills.io).
@@ -24,17 +24,17 @@ npx @aeon-ai-pay/agentos setup --check
 
 # Generate an image (auto-funds via WalletConnect when balance is insufficient)
 # On success, every image in the response is downloaded to ~/agentos-images/
-npx @aeon-ai-pay/agentos generate --prompt "a cyberpunk fox under neon rain"
+npx @aeon-ai-pay/agentos create-image --prompt "a cyberpunk fox under neon rain"
 
 # Choose aspect ratio / output format / model (defaults shown)
-npx @aeon-ai-pay/agentos generate \
+npx @aeon-ai-pay/agentos create-image \
   --prompt "An orange tabby cat playing in the snow, cinematic lighting" \
   --aspect-ratio 16:9 \
   --output-format png \
   --model replicate/black-forest-labs/flux-schnell
 
 # Save downloads to a custom directory
-npx @aeon-ai-pay/agentos generate --prompt "..." --output ./out
+npx @aeon-ai-pay/agentos create-image --prompt "..." --output ./out
 
 # Check wallet balance (BNB + USDT)
 npx @aeon-ai-pay/agentos wallet

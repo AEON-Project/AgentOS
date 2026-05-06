@@ -7,8 +7,8 @@ if (major < 25) {
   process.exit(1);
 }
 
-// WalletConnect v2 SDK 已知缺陷：relay 偶发 null WebSocket 帧导致
-// isJsonRpcPayload 内部 'id' in null 抛 TypeError，不影响业务流程，静默忽略
+// WalletConnect v2 known bug: relay occasionally sends null WebSocket frames causing
+// 'id' in null TypeError inside isJsonRpcPayload — harmless, suppress silently
 process.on("uncaughtException", (err) => {
   if (
     err instanceof TypeError &&
@@ -51,7 +51,7 @@ program
   });
 
 program
-  .command("generate")
+  .command("create-image")
   .description("Generate an AI image from a prompt, paying with USDT on BSC via x402")
   .requiredOption("--prompt <text>", "Image prompt (free-form text describing the desired image)")
   .option("--aspect-ratio <ratio>", "Image aspect ratio (e.g. 16:9, 1:1)", "16:9")
@@ -61,7 +61,7 @@ program
   .option("--service-url <url>", "Override service URL")
   .option("--private-key <key>", "Override EVM private key")
   .action(async (opts) => {
-    const { generate } = await import("../src/commands/generate.mjs");
+    const { generate } = await import("../src/commands/create-image.mjs");
     return generate(opts);
   });
 

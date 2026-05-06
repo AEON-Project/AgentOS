@@ -1,5 +1,5 @@
 /**
- * topup 命令：通过 WalletConnect 为本地钱包追加 USDT
+ * topup: transfer USDT to local wallet via WalletConnect
  */
 import { createPublicClient, http } from "viem";
 import { bsc } from "viem/chains";

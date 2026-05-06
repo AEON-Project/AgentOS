@@ -1,6 +1,6 @@
 /**
- * 配置管理：~/.agentos/config.json
- * 优先级：CLI 参数 > 环境变量 > config.json
+ * Config management: ~/.agentos/config.json
+ * Priority: CLI args > env vars > config.json
  */
 import { readFileSync, writeFileSync, mkdirSync, chmodSync } from "fs";
 import { join } from "path";
@@ -28,7 +28,7 @@ export function saveConfig(config) {
 }
 
 /**
- * 解析配置值，优先级：cliValue > envKey > config[configKey]
+ * Resolve config value: cliValue > envKey > config[configKey]
  */
 export function resolve(cliValue, envKey, configKey) {
   if (cliValue) return cliValue;

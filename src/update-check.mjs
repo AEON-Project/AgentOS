@@ -1,5 +1,5 @@
 /**
- * 自动版本检查 + 静默后台升级
+ * Background version check and silent auto-upgrade
  */
 
 import { execFileSync, spawn } from "node:child_process";

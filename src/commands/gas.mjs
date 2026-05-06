@@ -1,5 +1,5 @@
 /**
- * gas 命令：通过 WalletConnect 从主钱包向本地钱包转 BNB（withdraw 时支付 gas）
+ * gas: transfer BNB from main wallet to local wallet via WalletConnect (for withdraw gas)
  */
 import { loadConfig } from "../config.mjs";
 import { getBalanceByAddress } from "../balance.mjs";

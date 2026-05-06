@@ -401,7 +401,7 @@ function openQRInBrowser(uri, statusPort, amount, token = "USDT", network = "BNB
 <\/script>
 </body></html>`;
 
-  const filePath = join(tmpdir(), "agent-pay-qr.html");
+  const filePath = join(tmpdir(), "agentos-qr.html");
   writeFileSync(filePath, html);
 
   const cmd = process.platform === "darwin" ? "open" :
@@ -423,9 +423,9 @@ export async function initSignClient(projectId) {
     SignClient.init({
       projectId,
       metadata: {
-        name: "agent-pay",
-        description: "Agent payments via x402 protocol",
-        url: "https://github.com/AEON-Project/agent-pay",
+        name: "agentos",
+        description: "AEON AgentOS — platform-level execution system for AI Agents",
+        url: "https://github.com/AEON-Project/AgentOS",
         icons: [],
       },
     }),

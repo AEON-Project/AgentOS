@@ -4,7 +4,7 @@
 
 1. Wallet is configured — run `setup --check` first.
 2. Service URL is configured (built-in default is available).
-3. The `generate` command auto-checks allowance/balance and triggers WalletConnect funding when needed; **do not pre-call `topup`**.
+3. The `create-image` command auto-checks allowance/balance and triggers WalletConnect funding when needed; **do not pre-call `topup`**.
 
 ## Request Shape
 
@@ -43,7 +43,7 @@ The first call returns HTTP 402 with payment requirements; the second call is th
 ## Workflow
 
 1. Collect a prompt from the user.
-2. Run `agentos generate --prompt "<text>"` (add other flags only if user explicitly asks).
+2. Run `agentos create-image --prompt "<text>"` (add other flags only if user explicitly asks).
 3. CLI does the x402 dance (402 → fund-if-needed → approve-if-needed → signed retry → 200).
 4. CLI downloads each `data.images[].url` and reads its format/dimensions/size.
 5. Present the result table per image.

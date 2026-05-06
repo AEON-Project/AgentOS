@@ -1,5 +1,5 @@
 /**
- * withdraw 命令：将 session key 中的资金转回主钱包（USDT + BNB）
+ * withdraw: reclaim USDT and BNB from session key back to main wallet
  */
 import { createPublicClient, createWalletClient, http, parseUnits, formatUnits, encodeFunctionData } from "viem";
 import { privateKeyToAccount } from "viem/accounts";

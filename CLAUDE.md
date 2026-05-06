@@ -17,7 +17,7 @@ Published as both a global npm CLI (`agentos`) and an agent skill compatible wit
 ```bash
 # Run CLI commands directly
 node bin/cli.mjs setup                            # Generate local wallet, show config
-node bin/cli.mjs generate --prompt "<text>"       # Generate AI image via x402 payment
+node bin/cli.mjs create-image --prompt "<text>"       # Generate AI image via x402 payment
 node bin/cli.mjs wallet                           # Check USDT/BNB balance
 node bin/cli.mjs topup                            # Transfer USDT via WalletConnect
 node bin/cli.mjs gas                              # Transfer BNB for tx fees
@@ -25,7 +25,7 @@ node bin/cli.mjs withdraw                         # Reclaim funds from session k
 node bin/cli.mjs clean                            # Uninstall skill & clear cache
 
 # Or via npm scripts
-npm run generate -- --prompt "..."
+npm run create-image -- --prompt "..."
 npm run wallet
 
 # Release

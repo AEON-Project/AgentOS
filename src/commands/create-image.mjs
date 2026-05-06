@@ -346,7 +346,7 @@ function readImageMeta(filePath) {
       }
     }
   } catch {
-    // 解析失败保持 null
+    // leave null on parse failure
   } finally {
     closeSync(fd);
   }
