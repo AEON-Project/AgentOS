@@ -1,0 +1,53 @@
+{
+  "name": "@aeon-ai-pay/agentos",
+  "version": "0.1.0",
+  "description": "AEON AgentOS — platform-level execution system for AI Agents. Connects skill invocation, task execution, authorized payment and settlement. Currently open: AI image generation via x402 protocol with USDT on BSC.",
+  "type": "module",
+  "bin": {
+    "agentos": "bin/cli.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skills",
+    "scripts",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.mjs",
+    "generate": "node bin/cli.mjs generate",
+    "wallet": "node bin/cli.mjs wallet",
+    "release": "node scripts/release.mjs"
+  },
+  "dependencies": {
+    "@aeon-ai-pay/axios": "2.1.2",
+    "@aeon-ai-pay/evm": "2.1.4",
+    "@walletconnect/sign-client": "^2.17.0",
+    "axios": "^1.13.2",
+    "commander": "^13.0.0",
+    "qrcode-terminal": "^0.12.0",
+    "viem": "^2.39.0"
+  },
+  "engines": {
+    "node": ">=25"
+  },
+  "keywords": [
+    "agent-os",
+    "agentos",
+    "agent-skills",
+    "x402",
+    "ai-image",
+    "image-generation",
+    "crypto-payment",
+    "evm",
+    "bsc"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AEON-Project/agentos.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT"
+}
