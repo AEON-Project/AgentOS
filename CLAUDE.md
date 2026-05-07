@@ -56,7 +56,10 @@ Each command module exports a single async function. Pattern: parse options → 
 
 **`create-image.mjs` is the orchestration hot path.** It chains: `fetchPaymentRequirements` → `getWalletBalance` + `getAllowance` → optional `inlineWalletConnectTopup` (USDT top-up + 0.0003 BNB if no BNB and approve needed) → re-check balances → x402 EIP-712 sign and retry the same URL with `PAYMENT-SIGNATURE` header → download every `data.images[].url` to `~/agentos-images/` and parse PNG/JPEG/WebP headers in-process for width/height/size. After payment, re-queries USDT balance and emits a `balance: { before, after, charged, topup }` field in the result JSON for the agent to display.
 
-**Top-up amount selection**: when USDT is short, the CLI prompts the user (TTY only) to pick from preset tiers `[5, 20, 50]` USDT or a custom amount, with a hard floor of `requiredUsdt - currentBalance` (the shortfall). In non-TTY mode (e.g. agent-driven invocation without an attached terminal), the CLI falls back to auto-funding exactly the shortfall — preserving the original behavior so existing agent skills don't break.
+**Top-up amount selection** (3-way branch when USDT is short):
+1. `--topup-amount <usdt>` supplied → CLI uses it directly (must be ≥ shortfall, else exits with `TOPUP_AMOUNT_TOO_SMALL`).
+2. TTY attached, no `--topup-amount` → CLI interactively prompts the user to pick from `[5, 20, 50]` USDT or a custom value (≥ shortfall).
+3. Non-TTY (agent invocation), no `--topup-amount` → CLI exits **before** opening WalletConnect with a JSON containing `code: "TOPUP_REQUIRED"`, `shortfall`, `presets`, etc. The agent surfaces the choices to the user and reruns the same command with `--topup-amount`. This avoids opening a QR session that the agent can't dismiss to ask for input.
 
 ### Interactive WalletConnect Constraints
 `create-image`, `topup`, and `gas` all open a local QR page and block waiting for the user to scan in their wallet app (5-minute timeout from `WC_CONNECT_TIMEOUT_MS`). **Never run these commands with `run_in_background: true` and never kill the process while the user is mid-scan** — the on-chain transfer may have already been broadcast, leaving funds in the local wallet that the user paid for but didn't get credited toward generation. Recovery: run `agentos wallet` to check, then re-run `create-image` (do NOT re-topup).
@@ -69,7 +72,7 @@ Each command module exports a single async function. Pattern: parse options → 
 
 **Gas Model**: One-time `approve` tx requires BNB (~0.0003). Each generation itself is gasless (server-paid). Withdrawal requires BNB for direct on-chain transfer.
 
-**Pricing Model**: Per-call USDT amount is decided by the server in the 402 response, not hardcoded client-side. The wallet is charged exactly that amount. Top-up amount in TTY mode is user-selected from `[5, 20, 50]` USDT or a custom value, with a floor of `requiredUsdt - currentBalance`; non-TTY callers auto-fund exactly the shortfall.
+**Pricing Model**: Per-call USDT amount is decided by the server in the 402 response, not hardcoded client-side. The wallet is charged exactly that amount. Top-up amount is user-selected from `[5, 20, 50]` USDT or a custom value (with a floor of `requiredUsdt - currentBalance`); see "Top-up amount selection" above for the 3-way branching by `--topup-amount` flag / TTY presence.
 
 ## Key Dependencies
 - `viem` — EVM client (balance queries, contract reads)

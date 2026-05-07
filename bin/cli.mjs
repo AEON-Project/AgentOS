@@ -60,6 +60,7 @@ program
   .option("--output <dir>", "Directory to save downloaded images (default: ~/agentos-images)")
   .option("--service-url <url>", "Override service URL")
   .option("--private-key <key>", "Override EVM private key")
+  .option("--topup-amount <usdt>", "USDT amount to top up when balance is insufficient (must be >= shortfall). When omitted in non-TTY mode, the CLI exits with TOPUP_REQUIRED so the caller can ask the user to choose.")
   .action(async (opts) => {
     const { generate } = await import("../src/commands/create-image.mjs");
     return generate(opts);

@@ -103,11 +103,38 @@ export async function generate(opts) {
       needTopup = true;
       const shortfall = requiredUsdt - usdtNum;
       console.error(`USDT insufficient: have ${usdtNum}, need ${requiredUsdt}, shortfall ${shortfall.toFixed(6)}`);
-      if (process.stdin.isTTY) {
+      if (opts.topupAmount != null && String(opts.topupAmount).trim() !== "") {
+        const amt = Number(opts.topupAmount);
+        if (!Number.isFinite(amt) || amt <= 0) {
+          console.error(JSON.stringify({ error: `Invalid --topup-amount: ${opts.topupAmount}` }));
+          process.exit(1);
+        }
+        if (amt < shortfall) {
+          console.error(JSON.stringify({
+            error: `--topup-amount ${amt} USDT is less than shortfall ${shortfall.toFixed(6)} USDT.`,
+            code: "TOPUP_AMOUNT_TOO_SMALL",
+            shortfall: shortfall.toFixed(6),
+          }));
+          process.exit(1);
+        }
+        topupAmount = String(opts.topupAmount);
+        console.error(`Using --topup-amount: ${topupAmount} USDT`);
+      } else if (process.stdin.isTTY) {
         topupAmount = await promptTopupAmount(shortfall);
         console.error(`Selected top-up amount: ${topupAmount} USDT`);
       } else {
-        topupAmount = shortfall.toFixed(6);
+        const presets = TOPUP_PRESETS.filter((v) => v >= shortfall);
+        console.error(JSON.stringify({
+          error: "USDT insufficient: please choose a top-up amount and rerun with --topup-amount <usdt>.",
+          code: "TOPUP_REQUIRED",
+          shortfall: shortfall.toFixed(6),
+          required: requiredUsdt,
+          currentBalance: balanceBeforeUsdt,
+          address: sessionAddress,
+          presets,
+          hint: `Rerun: agentos create-image --prompt "<text>" --topup-amount <usdt>`,
+        }));
+        process.exit(1);
       }
     }
   } catch (e) {

@@ -39,6 +39,7 @@ The first call returns HTTP 402 with payment requirements; the second call is th
 | `--output <dir>` | no | `~/agentos-images` | local image save directory |
 | `--service-url <url>` | no | from config | base URL |
 | `--private-key <key>` | no | from config | session key override |
+| `--topup-amount <usdt>` | no | — | USDT amount to top up when balance is insufficient. Must be ≥ shortfall. Required in non-TTY (agent) mode if a top-up is needed; in a TTY, the CLI prompts interactively when omitted. |
 
 ## Workflow
 
@@ -130,6 +131,8 @@ Rules:
 | Funding signature timeout (5 min) | `Payment approval timed out. Please try again.` | Relay; do not auto-retry |
 | User rejected signature | `Payment approval was rejected. Please try again if you'd like to proceed.` | Relay; do not auto-retry |
 | Insufficient balance after funding | `Still insufficient USDT after funding.` | Relay |
+| Top-up required (non-TTY) | JSON with `code: "TOPUP_REQUIRED"`, `shortfall`, `presets` | Show choices to user, rerun with `--topup-amount <usdt>` (see SKILL.md Case B.3) |
+| `--topup-amount` smaller than shortfall | JSON with `code: "TOPUP_AMOUNT_TOO_SMALL"` | Re-ask user with the correct shortfall floor |
 | Server network error | Error JSON | Suggest retry / check `serviceUrl` |
 | Image download failed | Entry has `error` instead of `localPath` | Show single line `❌ Download failed: {error} (source: {imageUrl})` instead of the per-image block |
 
@@ -137,5 +140,6 @@ Rules:
 
 - Per-call USDT amount is **decided by the server** in the 402 response — not hardcoded client-side.
 - Top-up amount selection:
-  - **Interactive terminal (TTY)**: CLI prompts the user to choose a tier from `[5, 20, 50]` USDT or a custom amount. Tiers below the shortfall are filtered out, and the custom value must be ≥ shortfall.
-  - **Headless (non-TTY)**: CLI auto-funds exactly the shortfall (`requiredUsdt - currentBalance`) — preserving the original behavior so agent skills don't need the user to make a selection.
+  - **`--topup-amount <usdt>` supplied**: CLI uses that value directly (must be ≥ shortfall, else exits with `TOPUP_AMOUNT_TOO_SMALL`).
+  - **Interactive terminal (TTY)** without `--topup-amount`: CLI prompts the user to choose a tier from `[5, 20, 50]` USDT or a custom amount. Tiers below the shortfall are filtered out; custom must be ≥ shortfall.
+  - **Headless / agent mode** without `--topup-amount`: CLI exits with `TOPUP_REQUIRED` JSON before opening WalletConnect. The agent surfaces the choices to the user, then reruns the same command with `--topup-amount`.

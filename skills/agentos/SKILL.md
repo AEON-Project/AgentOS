@@ -17,7 +17,7 @@ description: >
 emoji: "🤖"
 homepage: https://github.com/AEON-Project/AgentOS
 metadata:
-  version: "0.1.1"
+  version: "0.1.2"
   author: AEON-Project
   openclaw:
     requires:
@@ -163,7 +163,8 @@ Trigger: User wants to **generate / create / draw / render** an image.
 agentos create-image --prompt "<text>" \
   [--aspect-ratio 16:9] \
   [--output-format png] \
-  [--model replicate/black-forest-labs/flux-schnell]
+  [--model replicate/black-forest-labs/flux-schnell] \
+  [--topup-amount <usdt>]
 ```
 
 CLI executes the following steps internally:
@@ -171,13 +172,18 @@ CLI executes the following steps internally:
 2. Serialize `{ model, inputs: { prompt, aspect_ratio, output_format } }` to JSON, URL-encode it as the `body` query param
 3. Fetch payment requirements via `GET /open/ai/x402/skillBoss/create?body=<encoded-json>` (exact USDT amount via 402 response)
 4. Check allowance → if insufficient and local wallet has no BNB, mark BNB needed
-5. Check USDT balance → if insufficient, mark top-up needed
-6. **If top-up or BNB needed** → auto-initiate WalletConnect funding (opens QR page, waits for user to confirm in wallet app, 5-minute timeout)
+5. Check USDT balance → if insufficient, decide top-up amount:
+   - If `--topup-amount <usdt>` is supplied (must be ≥ shortfall) → use it
+   - Else if a TTY is attached (user runs CLI directly) → interactively prompt the user to pick `5` / `20` / `50` USDT or a custom amount
+   - Else (headless / agent invocation) → exit with `{ "code": "TOPUP_REQUIRED", ... }` so the caller can ask the user and rerun with `--topup-amount`
+6. **If top-up or BNB needed** → initiate WalletConnect funding (opens QR page, waits for user to confirm in wallet app, 5-minute timeout)
 7. `approve` authorization (on-chain tx, costs small amount of BNB, only on first use or when allowance insufficient)
 8. EIP-712 signature (gasless) → re-send the same `GET` URL with `PAYMENT-SIGNATURE` header → server submits transfer and returns generated image URLs
 9. CLI downloads each `data.images[].url` to `~/agentos-images/` (override with `--output <dir>`) and reads format/size/dimensions
 
 **Defaults**: `aspect-ratio=16:9`, `output-format=png`, `model=replicate/black-forest-labs/flux-schnell`. Only `--prompt` is required; pass other flags only when the user explicitly asks for a different aspect ratio / format / model.
+
+**Agent invocation pattern**: an agent (no TTY) typically runs `create-image` without `--topup-amount` first. If the wallet is short, the CLI exits before opening WalletConnect with a `TOPUP_REQUIRED` JSON on stderr (see Case B.3). The agent must relay the choice to the user, then rerun the **same** `create-image` invocation with `--topup-amount <usdt>` appended.
 
 Output first line:
 
@@ -284,6 +290,51 @@ Relay to user. **Do not auto-retry.**
 #### Case B.2: Insufficient Balance After Funding
 
 CLI returns `Still insufficient USDT after funding` error. Relay to user.
+
+#### Case B.3: Top-up Required (Agent Must Ask User to Choose Amount)
+
+In headless / agent mode (no TTY attached), when the wallet has less USDT than the server-required amount and `--topup-amount` was not supplied, the CLI exits **before** opening any WalletConnect QR — emitting on stderr:
+
+```json
+{
+  "error": "USDT insufficient: please choose a top-up amount and rerun with --topup-amount <usdt>.",
+  "code": "TOPUP_REQUIRED",
+  "shortfall": "0.05",
+  "required": 0.1,
+  "currentBalance": "0.05",
+  "address": "0x...",
+  "presets": [5, 20, 50],
+  "hint": "Rerun: agentos create-image --prompt \"<text>\" --topup-amount <usdt>"
+}
+```
+
+Action:
+
+1. Detect `code === "TOPUP_REQUIRED"` in stderr.
+2. Show the user (verbatim copy template):
+
+   ```
+   💸 Top up required: shortfall {shortfall} USDT.
+   Choose an amount:
+     1) 5 USDT
+     2) 20 USDT
+     3) 50 USDT
+     4) Custom amount (>= {shortfall})
+   ```
+
+   - Drop any preset that does not appear in the `presets` array (these are pre-filtered by shortfall on the CLI side).
+   - If `presets` is empty, only show the Custom option.
+3. Wait for the user's choice. **Do not invent an amount.**
+4. Rerun the original generation with the chosen amount:
+
+   ```bash
+   agentos create-image --prompt "<text>" --topup-amount <usdt>
+   ```
+
+   Carry over any other flags from the original call (`--aspect-ratio`, `--output-format`, `--model`, `--output`).
+5. From here, the CLI proceeds with the WalletConnect QR flow normally — fall through to Case A on success, Case B on signature timeout/rejection, etc.
+
+> ⚠️ Do not silently substitute a default top-up amount or auto-pick a preset. The user must choose.
 
 #### Case C: Server Network/Call Failure
 

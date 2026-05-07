@@ -68,7 +68,7 @@ npx @aeon-ai-pay/agentos clean
 1. CLI auto-generates a session key (disposable wallet) locally
 2. On generate, if balance is insufficient, funds via WalletConnect QR scan (USDT + BNB gas)
    - In an interactive terminal, you pick a top-up tier (5 / 20 / 50 USDT or a custom amount, ≥ shortfall)
-   - When invoked headlessly (e.g. by an agent), auto-funds exactly the shortfall (requiredUsdt - currentBalance)
+   - When invoked headlessly (e.g. by an agent), pass `--topup-amount <usdt>`; otherwise the CLI exits with `TOPUP_REQUIRED` so the agent can ask the user to choose
 3. First use requires a one-time approve authorization (unlimited allowance, no repeat needed)
 4. Session key auto-signs the x402 payment — no manual confirmation required
 5. Server returns the generated image (URLs); CLI downloads each, reads dimensions/size
@@ -88,7 +88,7 @@ Agent flow:
 
 - Per-call USDT amount is **decided by the server** in the 402 response — not hardcoded client-side.
 - The wallet is charged exactly that amount.
-- Top-up: in an interactive terminal you choose `5` / `20` / `50` USDT (or a custom amount ≥ shortfall); headless callers auto-fund exactly `requiredUsdt - currentBalance`.
+- Top-up: in an interactive terminal you choose `5` / `20` / `50` USDT (or a custom amount ≥ shortfall); headless callers pass `--topup-amount <usdt>` (or are prompted by the calling agent on a `TOPUP_REQUIRED` exit).
 
 ## Configuration
 
