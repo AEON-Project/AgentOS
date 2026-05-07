@@ -50,7 +50,7 @@ No build step — all source is native ES Modules (`.mjs`), executed directly by
 - `balance.mjs` — EVM balance/allowance queries via Viem public client on BSC (`getWalletBalance`, `getAllowance`).
 - `config.mjs` — Config persistence at `~/.agentos/config.json` (mode 0o600). `resolve(cliValue, envKey, configKey)` enforces the priority chain **CLI args > env vars > config file**. Default `serviceUrl` falls back to `https://aeon-qrpay-dev.alchemytech.cc`.
 - `constants.mjs` — BSC RPC URL (QuickNode), USDT BEP-20 address, x402 facilitator address, WalletConnect default project ID and 5-minute timeout.
-- `update-check.mjs` — Background auto-update detection via `npm view`.
+- `update-check.mjs` — Synchronous version check on every CLI invocation (`bin/cli.mjs` calls it before parsing argv). When `npm view` reports a newer version, the current process **foreground-installs** the new package, runs its postinstall, then exits with code `2` and a stderr JSON `{ "code": "UPDATE_APPLIED", from, to }` — telling the caller (agent or human) to rerun the same command on the upgraded binary. Foreground (rather than detached background) is intentional: a backgrounded `npm install -g` mid-command leaves the global package half-replaced (new `bin/cli.mjs` registering commands whose `src/commands/*.mjs` files haven't been copied yet), which used to cause `ERR_MODULE_NOT_FOUND` on the very next command.
 
 ### Command Modules (`src/commands/`)
 Each command module exports a single async function. Pattern: parse options → `resolve()` config (CLI > env > file) → call shared utilities → write JSON to stdout or error JSON to stderr → `process.exit(0|1)`.
@@ -75,10 +75,72 @@ Each command module exports a single async function. Pattern: parse options → 
 
 **Gas Model**: One-time `approve` tx requires BNB (~0.0003) and is broadcast by the session key during `prepare` (or, as a fallback, lazily by the SDK on the first `create-image` call). Each subsequent generation is gasless (server-paid via x402 facilitator with EIP-712 signature). Withdrawal requires BNB for direct on-chain transfer.
 
-**Pricing Model**: Per-call USDT amount is decided by the server in the 402 response, not hardcoded client-side. The wallet is charged exactly that amount. Top-up amount is user-selected from `[5, 20, 50]` USDT or a custom value (with a floor of `requiredUsdt - currentBalance`); see "Top-up amount selection" above for the 3-way branching by `--topup-amount` flag / TTY presence.
+**Pricing Model**: Per-call USDT amount is decided by the server in the 402 response, not hardcoded client-side. The wallet is charged exactly that amount. Top-up amount is user-selected from `[5, 20, 50]` USDT or a custom value, with a floor of `max(MIN_TOPUP_USDT, ceil(requiredUsdt))` USDT (= 5 today, since per-call ≪ 5; auto-rises if a future capability ever costs more). The trigger threshold (when `prepare` *asks* for a top-up) is the separate `LOW_BALANCE_THRESHOLD = 1` USDT — see "Top-up amount selection" above for the 3-way branching by `--topup-amount` flag / TTY presence.
 
 ## Key Dependencies
 - `viem` — EVM client (balance queries, contract reads)
 - `@walletconnect/sign-client` — Wallet connection protocol
 - `@aeon-ai-pay/axios` / `@aeon-ai-pay/evm` — Custom x402 protocol wrappers
 - `commander` — CLI framework
+
+---
+
+## Development Conventions for AI Contributors (Required Reading)
+
+This section is a **hard contract** for any AI agent (or human) modifying this repo. Skipping any step below is treated as an incomplete change — even if tests pass.
+
+The single most common mistake in this codebase is **doc/code drift**: code is updated, but `SKILL.md` / `README.md` / `references/*.md` still describe the old behavior. The agent (which reads SKILL.md verbatim) then renders stale output, and users see commands that no longer exist or thresholds that don't match. Treat doc updates as part of the code change, not as follow-up work.
+
+### Doc/code sync rule
+
+If a change touches **any** of: command names · CLI flags · default values · exit codes · stdout JSON shape · stderr error codes · numeric thresholds · user-visible strings · verbatim templates → update **every** file in this list within the same change set:
+
+| Layer | File | What to update |
+| --- | --- | --- |
+| Code | `bin/cli.mjs`, `src/**/*.mjs` | The actual change |
+| Project intro | `README.md` | Command examples, "How It Works", Pricing, Prerequisites |
+| Project intro (this file) | `CLAUDE.md` | Architecture / Core Modules / Command list / model descriptions |
+| Skill spec | `skills/agentos/SKILL.md` | Command Overview, Step 1 / 1.5 / 2 / 3, Decision Routing, Copy Consistency Constraints (Line-Level Templates, Key Phrases) |
+| Skill references | `skills/agentos/references/create-image.md` | If `create-image` flags / output JSON / pricing change |
+| Skill references | `skills/agentos/references/wallet-ops.md` | If `wallet` / `prepare --topup-amount` / `withdraw` / `gas` change |
+| Skill references | `skills/agentos/references/error-handling.md` | If a new error code or error string is introduced |
+| Skill references | `skills/agentos/references/copy-constraints.md` | If a new `{placeholder}` is introduced |
+| Skill references | `skills/agentos/references/x402-protocol.md` | Only for x402-spec-level (rare) |
+| Versioning | `skills/agentos/SKILL.md` frontmatter `metadata.version` **and** `package.json` `version` | Bump together to the same value on every release |
+
+### Architectural rules of thumb
+
+- **Single source of truth per fact.** Numeric constants like `MIN_TOPUP_USDT = 5` and `LOW_BALANCE_THRESHOLD = 1` live in `src/funding.mjs`; docs reference them by *both* name and value so a grep on either lands in the same line.
+- **Verbatim templates stay in `SKILL.md`.** Anything the agent must reproduce literally (e.g. `✅ Generated`, `✅ Wallet prepared`, `> Reclaiming funds...`, `> Pre-check in progress...`) lives in `SKILL.md`. Details, edge cases, full field tables go in `references/*.md`. Never split a verbatim block across files.
+- **Stdout = JSON, stderr = human.** Every command's stdout must be a single parseable JSON object on the success path; stderr carries progress/diagnostic messages and may be free-form. Do not interleave free-form text into stdout — pipes break.
+- **References must resolve.** Every `[label](references/foo.md)` link in `SKILL.md` must point to a real file. Every `../SKILL.md#anchor` from a `references/*.md` must hit a real heading. The pre-merge check below verifies this.
+- **No silent renames or removals.** Renaming a command, removing a flag, or changing a default is a breaking change for both users and agents reading old transcripts. Document the prior name as removed in this CLAUDE.md *and* update SKILL.md Command Overview / Decision Routing in the same commit.
+- **Foreground over background for risky ops.** Anything that touches WalletConnect or `npm install` runs in the foreground (synchronous), never `spawn(..., { detached: true })` — otherwise mid-operation state inconsistencies bite users (e.g. half-replaced npm package after a backgrounded upgrade — see `update-check.mjs` for the cautionary tale).
+- **Carry the user's intent, not yours.** When a user requests a change, prefer modifying existing code/templates rather than introducing a parallel mechanism. Adding a new "v2" of something while keeping "v1" untouched almost always produces drift.
+
+### Pre-merge self-check (run these before declaring done)
+
+```bash
+# 1. All CLI commands are syntactically valid and parse correctly
+for f in bin/cli.mjs src/**/*.mjs; do node --check "$f" || echo "SYNTAX FAIL: $f"; done
+node bin/cli.mjs --help                # confirm the command list matches expectation
+
+# 2. Every reference link in SKILL.md still resolves
+cd skills/agentos
+grep -oE "references/[a-z-]+\.md" SKILL.md | sort -u | while read f; do
+  [ -f "$f" ] && echo "OK   $f" || echo "MISS $f"
+done
+
+# 3. No stale references to renamed/removed commands (exclude this CLAUDE.md to avoid self-match
+#    on the literal string used in the check itself)
+grep -rnH --exclude=CLAUDE.md "agentos topup\|agentos.*--old-flag" --include="*.md" --include="*.mjs" .
+
+# 4. Version numbers in SKILL.md frontmatter and package.json match
+node -e 'const fs = require("fs"); const sk = fs.readFileSync("skills/agentos/SKILL.md", "utf8").match(/version:\s*"([^"]+)"/)[1]; const pk = require("./package.json").version; console.log(sk === pk ? "OK version " + sk : "MISMATCH skill="+sk+" pkg="+pk);'
+```
+
+If any of the four checks fails, the change is not ready.
+
+### When the contract conflicts with the code
+
+If you find behavior in the code that contradicts what this `CLAUDE.md` describes, the code is wrong by default — surface the conflict to the user rather than silently changing one side. The user gets to decide which is canonical.

@@ -64,7 +64,7 @@ npx @aeon-ai-pay/agentos clean
 - Node.js >= 25
 - A mobile wallet app with WalletConnect support (MetaMask, OKX Wallet, Trust Wallet, etc.)
 - USDT (BEP-20) on BSC for image-generation payments
-- A small amount of BNB for approve gas (~$0.002/tx, only needed on first authorization)
+- A small amount of BNB (~0.0003) **in your main wallet** — `agentos prepare` automatically transfers it to the session key during the same WalletConnect scan to cover the one-time approve gas. You don't need to send BNB to the session key manually.
 
 ## How It Works
 

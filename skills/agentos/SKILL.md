@@ -17,7 +17,7 @@ description: >
 emoji: "🤖"
 homepage: https://github.com/AEON-Project/AgentOS
 metadata:
-  version: "0.1.6"
+  version: "0.1.7"
   author: AEON-Project
   openclaw:
     requires:
@@ -103,6 +103,22 @@ agentos setup --check
 3. Re-run `agentos setup --check` and continue normally from the output templates below.
 
 This is a one-time installation — no user confirmation needed, no error to surface.
+
+### Auto-Upgrade Handling (applies to every command)
+
+The CLI does a self-version check on every invocation. When it detects a newer version on npm, it **synchronously** upgrades itself in the foreground (logs `[update] @aeon-ai-pay/agentos X → Y, upgrading (foreground)...` to stderr), then exits with code `2` and a stderr JSON:
+
+```json
+{ "error": "Upgraded ... Rerun the previous command.", "code": "UPDATE_APPLIED", "from": "X", "to": "Y" }
+```
+
+Whenever any `agentos` command exits with `"code": "UPDATE_APPLIED"`:
+
+1. Treat it as a no-op success — the upgrade itself fixed nothing, but also broke nothing.
+2. **Rerun the same command verbatim** with the same arguments. The new version is now active.
+3. Do not relay the upgrade message to the user unless they explicitly asked about updates — surface the result of the rerun instead.
+
+> ⚠️ Do **not** keep retrying past one rerun. If the rerun also exits with `UPDATE_APPLIED` (extremely unlikely), stop and surface the error.
 
 CLI behavior:
 1. Reads `~/.agentos/config.json`
@@ -348,25 +364,15 @@ Rules:
 - Multiple images: render one block per image, separated by a blank line; the `Top-up` (if any) and `Charged` rows appear once at the end (not per-image).
 - Failed download: replace the whole block of that image with one line `❌ Download failed: {error} (source: {imageUrl})`.
 
-#### Case B: Funding Signature Timeout (5 minutes)
+#### Cases B / B.1 / B.2 — Funding-flow errors (timeout / rejection / insufficient after funding)
 
-CLI returns:
-```json
-{"error":"Payment approval timed out. Please try again."}
-```
-Relay to user and ask if they want to retry. **Do not auto-retry.**
+These three branches are short relay-only paths. **Full handling rules** (the verbatim error string emitted by the CLI and the "do not auto-retry" rule) live in [`references/error-handling.md`](references/error-handling.md). One-line summary for routing:
 
-#### Case B.1: User Rejected Signature
-
-CLI returns:
-```json
-{"error":"Payment approval was rejected. Please try again if you'd like to proceed."}
-```
-Relay to user. **Do not auto-retry.**
-
-#### Case B.2: Insufficient Balance After Funding
-
-CLI returns `Still insufficient USDT after funding` error. Relay to user.
+| Case | Trigger | Action |
+| --- | --- | --- |
+| B | `"Payment approval timed out. Please try again."` (5-minute WalletConnect timeout) | Relay verbatim, ask if retry. Do not auto-retry. |
+| B.1 | `"Payment approval was rejected. Please try again if you'd like to proceed."` (user dismissed in wallet app) | Relay verbatim. Do not auto-retry. |
+| B.2 | `"Still insufficient USDT after funding"` (main wallet sent less than expected) | Relay; user can rerun `agentos prepare --topup-amount <usdt>`. |
 
 #### Case B.3: Top-up Required (Agent Must Ask User to Choose Amount)
 
@@ -422,19 +428,18 @@ Action:
 
 > ⚠️ Do not silently substitute a default top-up amount, auto-pick a preset, or interpret a numeric reply as a 1-based index into the suggestion list.
 
-#### Case C: Server Network/Call Failure
+#### Cases C / D — Server failure / Empty prompt
 
-CLI returns `success: false` with HTTP error. Show the raw error and suggest the user retry later or check `serviceUrl`.
+Both are short relay-only paths. Full handling in [`references/error-handling.md`](references/error-handling.md):
 
-#### Case D: Empty / Invalid Prompt
+| Case | Trigger | Action |
+| --- | --- | --- |
+| C | `success: false` with non-2xx HTTP status (network / server failure) | Show raw error, suggest retry or check `serviceUrl`. |
+| D | `"Missing --prompt. Provide a non-empty image prompt."` | Ask user for a prompt; never invent one. |
 
-CLI returns:
-```json
-{"error":"Missing --prompt. Provide a non-empty image prompt."}
-```
-Ask the user to supply a prompt.
-
-See [create-image](references/create-image.md) for detailed field descriptions.
+See also:
+- [`references/create-image.md`](references/create-image.md) — field-level documentation for `create-image` output, CLI flags, pricing model.
+- [`references/error-handling.md`](references/error-handling.md) — full treatment of every non-success branch above.
 
 ---
 
@@ -442,103 +447,14 @@ See [create-image](references/create-image.md) for detailed field descriptions.
 
 Trigger: User wants to **check balance / add more funds / withdraw funds**.
 
-### 3.1 Check Local Wallet Balance
-
-```bash
-agentos wallet
-```
-
-Shows local wallet USDT balance and address. If `prepare` (or any earlier WalletConnect funding flow) has connected the main wallet at least once, the main wallet balance is displayed too.
-
-### 3.2 Add More USDT
-
-```bash
-agentos prepare --topup-amount <usdt>          # Force a transfer (>= 5 USDT) even if already prepared
-```
-
-`prepare` is the only way the CLI moves USDT from the main wallet into the session key. Without `--topup-amount`, it's a pre-flight that exits immediately when the wallet is already ready. With `--topup-amount` it always opens a WalletConnect QR and transfers the specified amount.
-
-> 💡 No need to top up BNB separately — `prepare` auto-requests 0.0003 BNB when it detects no allowance and no BNB.
-
-### 3.3 Withdraw Funds to Main Wallet
-
-```bash
-agentos withdraw                                  # Withdraw all USDT to recorded mainWallet
-agentos withdraw --amount <usdt>                  # Specify amount
-agentos withdraw --to 0xMainWallet                # Specify destination address
-agentos withdraw --to 0xMainWallet --amount <usdt>
-```
-
-> ⚠️ **Withdraw requires BNB for gas**:
-> Unlike x402 generation (gasless), `withdraw` is a **direct on-chain ERC20 transfer** from the local wallet,
-> which must pay BNB gas itself (recommended >= 0.0005 BNB).
-> Users need to transfer a small amount of BNB to the local wallet address from an exchange or their own wallet.
-
-#### Destination Address Resolution Priority
-
-1. CLI argument `--to <address>`
-2. `mainWallet` in `~/.agentos/config.json` (**only available after `prepare` (or any other WalletConnect flow) has connected the main wallet at least once**)
-
-#### Output Template (**copy must be verbatim**, variable substitution only)
-
-```
-> Reclaiming funds...
-
-From: 0x0...{session_last4}
-To: main wallet (0x0...{main_last4})
-
-Amount: {amount} USDT
-Status: completed
-```
-
-> The literal "main wallet" label is a spec requirement — **do not omit it**; the address in parentheses lets the user confirm the transfer target.
-
-#### Edge Cases
-
-| Error | Meaning | Action |
+| Sub-flow | Command | Where to look |
 | --- | --- | --- |
-| `No main wallet address found. Use --to <address>` | No mainWallet in config and no `--to` provided | Ask user to provide destination address |
-| `No USDT to withdraw.` | Local wallet USDT balance is 0 | Inform user nothing to withdraw, suggest `prepare` first |
-| `No BNB for gas. ...` | Local wallet has no BNB, cannot pay gas | Prompt user to run `agentos gas` to top up BNB via WalletConnect; see 3.4 |
-| `Requested X USDT but only Y available` | `--amount` exceeds actual balance | Show actual balance, ask user to confirm a new amount |
-| `Withdraw failed: ...` | On-chain transaction failed | Show raw error, suggest retrying later |
+| 3.1 Check local wallet balance | `agentos wallet` | [`references/wallet-ops.md` § 1](references/wallet-ops.md#1-check-local-wallet-balance) |
+| 3.2 Add more USDT (any time after `prepare`) | `agentos prepare --topup-amount <usdt>` | [`references/wallet-ops.md` § 2](references/wallet-ops.md#2-add-more-usdt) — also Step 1.5 above for first-time prepare |
+| 3.3 Withdraw to main wallet (verbatim `> Reclaiming funds...` template, edge cases) | `agentos withdraw [--to <addr>] [--amount <n>]` | [`references/wallet-ops.md` § 3](references/wallet-ops.md#3-withdraw-funds-to-main-wallet) |
+| 3.4 Top up BNB only (pre-withdraw gas) | `agentos gas [--amount <bnb>]` | [`references/wallet-ops.md` § 4](references/wallet-ops.md#4-top-up-gas-for-local-wallet-bnb) |
 
-### 3.4 Top Up Gas for Local Wallet (BNB)
-
-When `withdraw` reports `No BNB for gas` or additional BNB is needed, use the dedicated `gas` subcommand to transfer a small amount of BNB from the main wallet via WalletConnect.
-
-```bash
-agentos gas                    # Default 0.001 BNB
-agentos gas --amount 0.002     # Custom amount
-```
-
-⚠️ **This command uses an interactive WalletConnect flow** (same mechanism as `prepare`):
-- Terminal prints QR code + `wc:` URI
-- User scans with wallet app to connect main wallet
-- Confirms 1 BNB transfer in wallet (amount = `<amount>`, target = local wallet)
-- Maximum wait 5 minutes, **must not run in background**
-
-On success, `mainWallet` is automatically saved to config (so subsequent `withdraw` can omit `--to`).
-
-#### Output Template
-
-```
-> Topping up gas...
-Initializing WalletConnect session...
-Waiting for wallet confirmation...
-BNB transfer confirmed.
-
-Local wallet: 0x0...{last4}
-Balance: {bnb} BNB
-```
-
-#### Edge Cases
-
-| Error | Action |
-| --- | --- |
-| `Transaction rejected in wallet.` | Inform user it was cancelled, ask if they want to retry. **Do not auto-retry** |
-| `BNB transfer failed: ...` | Main wallet BNB insufficient or on-chain revert; prompt user to prepare BNB in main wallet first |
-| WalletConnect 5-minute timeout | Inform user of timeout, suggest re-running `gas` |
+The verbatim `> Reclaiming funds...` template (with `To: main wallet (0x0...{last4})` / `Status: completed` lines) is reproduced inside `references/wallet-ops.md`; the corresponding entries in this file's *Copy Consistency Constraints* section remain the regression guardrail.
 
 ---
 
@@ -589,22 +505,15 @@ The following **key phrases** and **line-level output templates** must be **verb
 
 ### Variable Mapping
 
-| Placeholder | Source |
-| --- | --- |
-| `{last4}` | Last 4 characters of `address` from `setup --check` / `wallet` / `withdraw` output |
-| `{prompt}` | `prompt` field from `create-image` output |
-| `{localPath}` | `images[].localPath` from `create-image` output |
-| `{format}` | `images[].format` (uppercase when displayed) |
-| `{width}` / `{height}` | `images[].width` / `images[].height` |
-| `{sizeHuman}` | `images[].sizeHuman` |
-| `{transaction}` | top-level `transaction` field |
-| `{charged}` | `balance.charged` from `create-image` output (USDT deducted this call) |
-| `{topup}` | `balance.topup` from `create-image` (or top-level `topup` from `prepare`) — USDT funded this call; `null` ⇒ skip Top-up row |
-| `{initial}` | `balance.initial` from `create-image` (wallet USDT before any top-up this call) |
-| `{before}` / `{after}` | `balance.before` (USDT before the on-chain charge = after any top-up) / `balance.after` (USDT after the on-chain charge). Should satisfy `before − charged ≈ after`. |
-| `{initialUsdt}` | top-level `initialUsdt` from `prepare` output (wallet USDT before any funding this run; `prepare`-only) |
-| `{approveTx}` | top-level `approveTx` from `prepare` output (the on-chain approve tx hash; `null` ⇒ skip Approve row) |
-| `{amount}` | `withdrawn` field from `withdraw` output |
+The full Variable Mapping table — every `{placeholder}` used in any verbatim template above and the JSON field it resolves to — lives in [`references/copy-constraints.md`](references/copy-constraints.md). Keep that file open whenever you're rendering one of the `✅` / `💸` / `🏦` lines.
+
+Quick orientation only:
+
+- `{last4}` — last 4 chars of the EVM `address` (always rendered as `0x0...{last4}`)
+- `{transaction}` — top-level `transaction` from `create-image`, never `paymentResponse.txHash`
+- `{charged}` / `{topup}` / `{before}` / `{after}` / `{initial}` — fields under `balance.*` in `create-image`
+- `{initialUsdt}` / `{approveTx}` — `prepare`-only top-level fields
+- `{minTopup}` / `{currentBalance}` / `{presets}` — fields inside the `TOPUP_REQUIRED` stderr JSON
 
 ### Prohibited Deviations
 
