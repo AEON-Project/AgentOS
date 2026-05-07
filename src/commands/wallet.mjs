@@ -35,7 +35,7 @@ export async function wallet(opts) {
     console.log(JSON.stringify(result, null, 2));
 
     if (usdtRaw === 0n) {
-      console.error("Warning: No USDT balance. Run 'agentos topup --amount <usdt>' to add funds.");
+      console.error("Warning: No USDT balance. Run 'agentos prepare' to fund the wallet (5 USDT minimum).");
     }
   } catch (error) {
     console.error(JSON.stringify({ error: error.message }));

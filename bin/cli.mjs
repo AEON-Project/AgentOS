@@ -51,6 +51,16 @@ program
   });
 
 program
+  .command("prepare")
+  .description("Pre-flight: ensure session key has >= 5 USDT and an unlimited approve to the x402 facilitator. Also the canonical way to add more funds — passing --topup-amount forces a WalletConnect transfer even if already prepared.")
+  .option("--topup-amount <usdt>", "USDT amount to transfer (must be >= 5). When the wallet is already prepared, supplying this still triggers a top-up; when below 5 USDT, this is required in non-TTY mode.")
+  .option("--private-key <key>", "Override EVM private key")
+  .action(async (opts) => {
+    const { prepare } = await import("../src/commands/prepare.mjs");
+    return prepare(opts);
+  });
+
+program
   .command("create-image")
   .description("Generate an AI image from a prompt, paying with USDT on BSC via x402")
   .requiredOption("--prompt <text>", "Image prompt (free-form text describing the desired image)")
@@ -73,17 +83,6 @@ program
   .action(async (opts) => {
     const { wallet } = await import("../src/commands/wallet.mjs");
     return wallet(opts);
-  });
-
-program
-  .command("topup")
-  .description("Top up local wallet via WalletConnect (USDT + BNB for approve gas)")
-  .option("--amount <usdt>", "USDT amount to add", "50")
-  .option("--skip-gas", "Skip automatic BNB transfer", false)
-  .option("--project-id <id>", "WalletConnect Cloud project ID")
-  .action(async (opts) => {
-    const { topup } = await import("../src/commands/topup.mjs");
-    return topup(opts);
   });
 
 program

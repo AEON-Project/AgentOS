@@ -2,25 +2,21 @@ import { createX402Api, decodePaymentResponse, fetchPaymentRequirements } from "
 import { resolve } from "../config.mjs";
 import { getWalletBalance, getAllowance } from "../balance.mjs";
 import axios from "axios";
-import { BSC_RPC_URL, USDT_BSC } from "../constants.mjs";
 import {
-  withWallet,
-  requestERC20Transfer,
-  requestNativeTransfer,
-  setStatus,
-} from "../walletconnect.mjs";
+  fundSessionKey,
+  promptTopupAmount,
+  MIN_TOPUP_USDT,
+  TOPUP_PRESETS,
+} from "../funding.mjs";
 import { mkdirSync, createWriteStream, existsSync, unlinkSync, openSync, readSync, closeSync, statSync } from "node:fs";
 import { join, basename, extname } from "node:path";
 import { homedir } from "node:os";
 import { URL } from "node:url";
 import { get as httpsGet } from "node:https";
 import { get as httpGet } from "node:http";
-import { createInterface } from "node:readline/promises";
 
-const AUTO_GAS_BNB = "0.0003";
 const DEFAULT_IMAGE_DIR = join(homedir(), "agentos-images");
 const DEFAULT_MODEL = "replicate/black-forest-labs/flux-schnell";
-const TOPUP_PRESETS = [5, 20, 50];
 
 export async function generate(opts) {
   console.error("Generating image...");
@@ -72,12 +68,14 @@ export async function generate(opts) {
   let needGas = false;
   let sessionAddress;
   let topupAmount = null;
-  let balanceBeforeUsdt = null;
+  let balanceInitialUsdt = null;
+  let balanceBeforeChargeUsdt = null;
 
   try {
     const { address, usdt, bnb, bnbRaw } = await getWalletBalance(privateKey);
     sessionAddress = address;
-    balanceBeforeUsdt = usdt;
+    balanceInitialUsdt = usdt;
+    balanceBeforeChargeUsdt = usdt;
     const usdtNum = parseFloat(usdt);
 
     console.error(`Wallet: ${address}`);
@@ -102,34 +100,35 @@ export async function generate(opts) {
     if (usdtNum < requiredUsdt) {
       needTopup = true;
       const shortfall = requiredUsdt - usdtNum;
-      console.error(`USDT insufficient: have ${usdtNum}, need ${requiredUsdt}, shortfall ${shortfall.toFixed(6)}`);
+      const minTopup = Math.max(MIN_TOPUP_USDT, Math.ceil(shortfall));
+      console.error(`USDT insufficient: have ${usdtNum}, need ${requiredUsdt}, shortfall ${shortfall.toFixed(6)} (top-up minimum: ${minTopup} USDT)`);
       if (opts.topupAmount != null && String(opts.topupAmount).trim() !== "") {
         const amt = Number(opts.topupAmount);
         if (!Number.isFinite(amt) || amt <= 0) {
           console.error(JSON.stringify({ error: `Invalid --topup-amount: ${opts.topupAmount}` }));
           process.exit(1);
         }
-        if (amt < shortfall) {
+        if (amt < minTopup) {
           console.error(JSON.stringify({
-            error: `--topup-amount ${amt} USDT is less than shortfall ${shortfall.toFixed(6)} USDT.`,
+            error: `--topup-amount ${amt} USDT is below the ${minTopup} USDT minimum for this call.`,
             code: "TOPUP_AMOUNT_TOO_SMALL",
-            shortfall: shortfall.toFixed(6),
+            minTopup,
           }));
           process.exit(1);
         }
         topupAmount = String(opts.topupAmount);
         console.error(`Using --topup-amount: ${topupAmount} USDT`);
       } else if (process.stdin.isTTY) {
-        topupAmount = await promptTopupAmount(shortfall);
+        topupAmount = await promptTopupAmount(minTopup);
         console.error(`Selected top-up amount: ${topupAmount} USDT`);
       } else {
-        const presets = TOPUP_PRESETS.filter((v) => v >= shortfall);
+        const presets = TOPUP_PRESETS.filter((v) => v >= minTopup);
         console.error(JSON.stringify({
-          error: "USDT insufficient: please choose a top-up amount and rerun with --topup-amount <usdt>.",
+          error: `USDT balance is below the ${minTopup} USDT minimum for this call. Choose a top-up amount and rerun with --topup-amount <usdt>.`,
           code: "TOPUP_REQUIRED",
-          shortfall: shortfall.toFixed(6),
+          minTopup,
           required: requiredUsdt,
-          currentBalance: balanceBeforeUsdt,
+          currentBalance: balanceInitialUsdt,
           address: sessionAddress,
           presets,
           hint: `Rerun: agentos create-image --prompt "<text>" --topup-amount <usdt>`,
@@ -144,15 +143,16 @@ export async function generate(opts) {
 
   if (needTopup || needGas) {
     console.error("Funding flow triggered...");
-    await inlineWalletConnectTopup({
+    await fundSessionKey({
       sessionAddress,
-      amount: needTopup ? topupAmount : null,
+      usdtAmount: needTopup ? topupAmount : null,
       needGas,
     });
 
     console.error("Re-checking wallet balance...");
     try {
       const { usdt, bnbRaw } = await getWalletBalance(privateKey);
+      balanceBeforeChargeUsdt = usdt;
       const usdtNum = parseFloat(usdt);
 
       if (needGas && bnbRaw === 0n) {
@@ -250,7 +250,8 @@ export async function generate(opts) {
       transaction,
       images: downloaded,
       balance: {
-        before: balanceBeforeUsdt,
+        initial: balanceInitialUsdt,
+        before: balanceBeforeChargeUsdt,
         after: balanceAfterUsdt,
         charged: requiredUsdt,
         topup: topupAmount,
@@ -271,118 +272,6 @@ export async function generate(opts) {
     console.error(JSON.stringify(result, null, 2));
     process.exit(1);
   }
-}
-
-async function promptTopupAmount(shortfall) {
-  const presets = TOPUP_PRESETS.filter((v) => v >= shortfall);
-  const customIdx = presets.length + 1;
-
-  console.error("");
-  console.error(`Choose top-up amount (need at least ${shortfall.toFixed(6)} USDT):`);
-  presets.forEach((v, i) => {
-    console.error(`  ${i + 1}) ${v} USDT`);
-  });
-  console.error(`  ${customIdx}) Custom amount`);
-
-  const rl = createInterface({ input: process.stdin, output: process.stderr });
-  try {
-    while (true) {
-      const ans = (await rl.question(`Enter choice [1-${customIdx}]: `)).trim();
-      const n = Number(ans);
-      if (Number.isInteger(n) && n >= 1 && n <= presets.length) {
-        return String(presets[n - 1]);
-      }
-      if (Number.isInteger(n) && n === customIdx) {
-        const custom = (await rl.question(`Enter USDT amount (>= ${shortfall.toFixed(6)}): `)).trim();
-        const cn = Number(custom);
-        if (!Number.isFinite(cn) || cn <= 0) {
-          console.error("Invalid amount, please retry.");
-          continue;
-        }
-        if (cn < shortfall) {
-          console.error(`Amount must be at least ${shortfall.toFixed(6)} USDT.`);
-          continue;
-        }
-        return custom;
-      }
-      console.error("Invalid choice, please retry.");
-    }
-  } finally {
-    rl.close();
-  }
-}
-
-async function inlineWalletConnectTopup({ sessionAddress, amount, needGas }) {
-  const pageAmount = amount || (needGas ? AUTO_GAS_BNB : null);
-  const pageToken = amount ? "USDT" : "BNB";
-  const pageGasAmount = (needGas && amount) ? AUTO_GAS_BNB : null;
-  await withWallet({ amount: pageAmount, token: pageToken, gasAmount: pageGasAmount }, async ({ signClient, session, peerAddress }) => {
-    const { createPublicClient, http } = await import("viem");
-    const { bsc } = await import("viem/chains");
-    const publicClient = createPublicClient({
-      chain: bsc,
-      transport: http(BSC_RPC_URL, { timeout: 15000, retryCount: 2 }),
-    });
-
-    if (amount) {
-      setStatus("signing", { amount, token: "USDT", to: sessionAddress });
-      console.error(`\nRequesting USDT transfer: ${amount} USDT → ${sessionAddress}`);
-      console.error("Please confirm the transaction in your wallet app...");
-
-      const usdtTxHash = await requestERC20Transfer(signClient, session, {
-        from: peerAddress,
-        to: sessionAddress,
-        token: USDT_BSC,
-        amount,
-        decimals: 18,
-      });
-      setStatus("tx_submitted", { txHash: usdtTxHash, amount, token: "USDT" });
-      console.error(`USDT transfer submitted: ${usdtTxHash}`);
-      console.error("Waiting for confirmation...");
-
-      const receipt = await publicClient.waitForTransactionReceipt({
-        hash: usdtTxHash,
-        timeout: 60_000,
-      });
-      if (receipt.status !== "success") {
-        throw new Error("USDT transfer transaction reverted");
-      }
-      console.error("USDT transfer confirmed.");
-    }
-
-    if (needGas) {
-      try {
-        const activeSessions = signClient.session.getAll();
-        const sessionAlive = activeSessions.some(s => s.topic === session.topic);
-        if (!sessionAlive) {
-          throw new Error("WalletConnect session expired between USDT and BNB transfers. Run 'agentos gas' to add BNB manually.");
-        }
-      } catch (e) {
-        if (e.message.includes("session expired")) throw e;
-      }
-
-      setStatus("signing", { amount: AUTO_GAS_BNB, token: "BNB", to: sessionAddress });
-      console.error(`\nRequesting BNB transfer: ${AUTO_GAS_BNB} BNB → ${sessionAddress} (for approve gas)`);
-      console.error("Please confirm the transaction in your wallet app...");
-      const bnbTxHash = await requestNativeTransfer(signClient, session, {
-        from: peerAddress,
-        to: sessionAddress,
-        value: AUTO_GAS_BNB,
-      });
-      setStatus("tx_submitted", { txHash: bnbTxHash, amount: AUTO_GAS_BNB, token: "BNB" });
-      console.error(`BNB transfer submitted: ${bnbTxHash}`);
-      const bnbReceipt = await publicClient.waitForTransactionReceipt({
-        hash: bnbTxHash,
-        timeout: 60_000,
-      });
-      if (bnbReceipt.status !== "success") {
-        throw new Error("BNB transfer reverted");
-      }
-      console.error("BNB transfer confirmed.");
-    }
-
-    setStatus("confirmed", { token: amount ? "USDT" : "BNB" });
-  });
 }
 
 function readImageMeta(filePath) {

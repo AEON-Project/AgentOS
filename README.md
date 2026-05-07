@@ -22,7 +22,11 @@ Supported agents: Claude Code, Cursor, Codex, OpenClaw, Gemini CLI, GitHub Copil
 # First run: auto-create local wallet (private key generated locally, never uploaded)
 npx @aeon-ai-pay/agentos setup --check
 
-# Generate an image (auto-funds via WalletConnect when balance is insufficient)
+# Pre-flight: ensure the session key has >= 5 USDT and an unlimited approve to the
+# facilitator. Triggers a WalletConnect QR (1 confirmation) only if needed.
+npx @aeon-ai-pay/agentos prepare
+
+# Generate an image. With prepare done, this is a gasless EIP-712 signature only.
 # On success, every image in the response is downloaded to ~/agentos-images/
 npx @aeon-ai-pay/agentos create-image --prompt "a cyberpunk fox under neon rain"
 
@@ -39,10 +43,10 @@ npx @aeon-ai-pay/agentos create-image --prompt "..." --output ./out
 # Check wallet balance (BNB + USDT)
 npx @aeon-ai-pay/agentos wallet
 
-# Manually top up USDT to local wallet
-npx @aeon-ai-pay/agentos topup --amount 1
+# Add more USDT later (forces a transfer even if already prepared)
+npx @aeon-ai-pay/agentos prepare --topup-amount 50
 
-# Top up BNB gas for local wallet
+# Top up BNB gas for local wallet (only needed before withdraw)
 npx @aeon-ai-pay/agentos gas --amount 0.001
 
 # Withdraw remaining funds (USDT + BNB) back to main wallet
@@ -66,12 +70,12 @@ npx @aeon-ai-pay/agentos clean
 
 ```
 1. CLI auto-generates a session key (disposable wallet) locally
-2. On generate, if balance is insufficient, funds via WalletConnect QR scan (USDT + BNB gas)
-   - In an interactive terminal, you pick a top-up tier (5 / 20 / 50 USDT or a custom amount, ≥ shortfall)
+2. `prepare` does the up-front money work in one WalletConnect session:
+   - If balance < 5 USDT, transfers your chosen tier (5 / 20 / 50 USDT or custom ≥ 5) from main wallet to session key
+   - If a fresh approve is needed, also transfers 0.0003 BNB for gas, then session key broadcasts `ERC20.approve(facilitator, MaxUint256)`
    - When invoked headlessly (e.g. by an agent), pass `--topup-amount <usdt>`; otherwise the CLI exits with `TOPUP_REQUIRED` so the agent can ask the user to choose
-3. First use requires a one-time approve authorization (unlimited allowance, no repeat needed)
-4. Session key auto-signs the x402 payment — no manual confirmation required
-5. Server returns the generated image (URLs); CLI downloads each, reads dimensions/size
+3. After `prepare`, every `create-image` is a single gasless EIP-712 signature — no further wallet interaction
+4. Server returns the generated image (URLs); CLI downloads each, reads dimensions/size
 
 Agent flow:
   User prompt -> Agent activates skill -> x402 two-phase protocol:
@@ -88,7 +92,8 @@ Agent flow:
 
 - Per-call USDT amount is **decided by the server** in the 402 response — not hardcoded client-side.
 - The wallet is charged exactly that amount.
-- Top-up: in an interactive terminal you choose `5` / `20` / `50` USDT (or a custom amount ≥ shortfall); headless callers pass `--topup-amount <usdt>` (or are prompted by the calling agent on a `TOPUP_REQUIRED` exit).
+- Top-up tiers: `5` / `20` / `50` USDT or custom ≥ 5 USDT — never a "just enough" decimal. The 5 USDT floor auto-rises if a future capability ever costs more (e.g. an 8 USDT call would offer the `20` / `50` tiers plus custom ≥ 8).
+- Headless callers pass `--topup-amount <usdt>` (or are prompted by the calling agent on a `TOPUP_REQUIRED` exit).
 
 ## Configuration
 

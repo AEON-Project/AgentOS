@@ -17,7 +17,7 @@ description: >
 emoji: "🤖"
 homepage: https://github.com/AEON-Project/AgentOS
 metadata:
-  version: "0.1.3"
+  version: "0.1.4"
   author: AEON-Project
   openclaw:
     requires:
@@ -37,11 +37,11 @@ compatibility: Requires Node.js >= 25 and npm
 **Currently open skill**: AI image generation — generate images from a text prompt, paying per request with USDT on BSC via the x402 HTTP payment protocol.
 
 > ⚡ **Gas Model**:
-> BSC USDT does not support EIP-3009. The client must perform a one-time `approve` authorization (on-chain tx) before the first generation; the actual USDT transfer is executed by the server.
-> - **Generate (x402)**: Check allowance → if insufficient and no BNB, auto-transfer 0.0003 BNB via WalletConnect for approve gas → if USDT insufficient, auto-transfer USDT → EIP-712 signature (gasless) → server submits transfer (server pays gas) → image returned
-> - **Top up (topup)**: Single WalletConnect session, transfers USDT to local wallet. User confirms **1 transaction** in wallet app
-> - **Withdraw (withdraw)**: Local wallet sends ERC20 transfer + BNB directly on-chain, requires BNB for gas
-> - **Gas top-up (gas)**: Transfers BNB only (used when withdraw reports "No BNB for gas" or additional BNB is needed)
+> BSC USDT does not support EIP-3009. The session key must perform a one-time `approve` authorization (on-chain tx) before the first generation; the actual USDT transfer is executed by the server.
+> - **Prepare (prepare)**: Single WalletConnect session — funds session key with USDT (and 0.0003 BNB if a fresh approve is needed), then session key broadcasts `ERC20.approve(facilitator, MaxUint256)`. After this, all subsequent generations are gasless. Also the canonical way to add more USDT later via `--topup-amount <n>`.
+> - **Generate (x402)**: Pure EIP-712 signature → server submits transfer (server pays gas) → image returned. As a safety net, if `prepare` was skipped or funds ran out, `create-image` falls back into the same funding flow.
+> - **Withdraw (withdraw)**: Local wallet sends ERC20 transfer + BNB directly on-chain, requires BNB for gas.
+> - **Gas top-up (gas)**: Transfers BNB only (used when withdraw reports "No BNB for gas" or additional BNB is needed).
 
 ---
 
@@ -69,10 +69,10 @@ All operations use the global command `agentos`.
 ```bash
 agentos setup --check                          # Pre-check / auto-create wallet
 agentos setup --show                           # Show configuration
+agentos prepare [--topup-amount <usdt>]        # Pre-flight (≥5 USDT + facilitator approve); also adds more funds when --topup-amount is supplied
 agentos create-image --prompt "<text>"             # Generate AI image (x402-paid)
 agentos wallet                                 # Check local wallet balance
-agentos topup --amount <usdt>                  # Top up USDT (WalletConnect, 1 confirmation)
-agentos gas [--amount <bnb>]                   # Top up BNB for local wallet (WalletConnect, for approve/withdraw)
+agentos gas [--amount <bnb>]                   # Top up BNB for local wallet (WalletConnect, for withdraw)
 agentos clean                                  # Uninstall skill, clear cache
 agentos withdraw [--to <addr>] [--amount <usdt>]  # Withdraw funds
 ```
@@ -109,7 +109,7 @@ CLI behavior:
 2. If `privateKey` is missing → generates a new private key locally with `viem.generatePrivateKey()` and saves it
 3. Returns JSON: `{ ready, created, mode, address, mainWallet, serviceUrl }`
 
-> 💰 **Pricing**: per-call USDT is decided by the x402 server (returned in the 402 response). When the wallet is short, the CLI prompts the user in an interactive terminal to choose a top-up tier (`5` / `20` / `50` USDT or a custom amount, ≥ shortfall); when invoked headlessly (e.g. by an agent without an attached TTY), it auto-funds exactly `requiredUsdt - currentBalance`.
+> 💰 **Pricing**: per-call USDT is decided by the x402 server (returned in the 402 response). The local session key always tops up in **whole-USDT tiers** — `5` / `20` / `50` (or a custom value), with a **5 USDT floor** (so a single funding lasts many image generations). When the per-call requirement exceeds 5 USDT, the floor automatically rises to cover it (e.g. an 8 USDT call would offer the `20` / `50` tiers only, plus custom ≥ 8). The CLI never asks the user to fund a "just enough" decimal like `0.0104`.
 
 ### Output Templates
 
@@ -145,6 +145,36 @@ Auto-creating your designated wallet...
 
 ---
 
+## Step 1.5: Pre-flight (Balance Verification + Pre-Authorize)
+
+**Always** run between Step 1 (setup) and Step 2 (image generation). This step verifies the wallet is funded **before** the user is asked for a prompt, so the funding QR scan happens up front rather than mid-generation.
+
+```bash
+agentos prepare
+```
+
+CLI behavior:
+1. Reads the session key balance and the USDT allowance to the x402 facilitator.
+2. **If balance ≥ 5 USDT and the facilitator is already approved (allowance > 0)** → exit `0` immediately with `{ "ready": true, ... }`. No QR, no user interaction.
+3. **Otherwise** → trigger a single WalletConnect session and, in one user-confirmed flow:
+   - Transfer the chosen amount of USDT from the main wallet to the session key (only if balance < 5 USDT).
+   - Transfer 0.0003 BNB for approve gas (only if a fresh approve is needed and the session key has no BNB).
+   - Session key broadcasts `ERC20.approve(facilitator, MaxUint256)` once → confirmed → `{ "ready": true, "approveTx": "0x..." }` on stdout.
+
+### 1.5.A — Already prepared
+
+CLI prints `Wallet already prepared (...)` to stderr and JSON `{ "ready": true, ... }` on stdout. Proceed to Step 2 silently — do not surface anything to the user.
+
+### 1.5.B — Headless top-up required (agent path)
+
+CLI exits with stderr JSON `{ "code": "TOPUP_REQUIRED", "minTopup": 5, "currentBalance": "...", "address": "...", "presets": [5, 20, 50], "hint": "..." }`. Handle exactly the same as Case B.3 in Step 2.2 — show the user the suggested tiers, accept the user's reply as a literal USDT amount, then rerun `agentos prepare --topup-amount <usdt>`.
+
+### 1.5.C — Funding rejected / timed out
+
+If WalletConnect signing times out or the user rejects, relay the error and ask whether to retry. **Do not auto-retry.**
+
+---
+
 ## Step 2: Generate Image (with Auto Top-up When Insufficient)
 
 Trigger: User wants to **generate / create / draw / render** an image.
@@ -155,7 +185,7 @@ Trigger: User wants to **generate / create / draw / render** an image.
 - If the user has not yet supplied a prompt, ask (verbatim):
   > What image would you like me to generate? Describe it in a sentence or two.
 - Once the user gives a prompt, **execute immediately** — no second confirmation needed. Proceed to 2.1.
-- Actual deduction per generation is decided by the x402 server (returned in the 402 response). If the wallet has less than the server-required amount, the CLI auto-triggers WalletConnect funding in 2.1 — do not pre-call `topup`. In a TTY the user is asked to pick a top-up tier (`5` / `20` / `50` USDT or a custom value ≥ shortfall); in headless agent mode the CLI funds exactly the shortfall.
+- Actual deduction per generation is decided by the x402 server (returned in the 402 response). Step 1.5 (`agentos prepare`) is supposed to have already brought the wallet to a "ready" state with ≥ 5 USDT and an unlimited approve, so most calls flow straight through. As a safety net, `create-image` re-checks balance internally and falls back into the same funding flow if the wallet somehow ended up short — using the same tiered top-up (`5` / `20` / `50` USDT or custom), with the floor raised to `requiredUsdt` if the per-call price ever exceeds 5 USDT.
 
 ### 2.1 Execute Generation
 
@@ -172,10 +202,11 @@ CLI executes the following steps internally:
 2. Serialize `{ model, inputs: { prompt, aspect_ratio, output_format } }` to JSON, URL-encode it as the `body` query param
 3. Fetch payment requirements via `GET /open/ai/x402/skillBoss/create?body=<encoded-json>` (exact USDT amount via 402 response)
 4. Check allowance → if insufficient and local wallet has no BNB, mark BNB needed
-5. Check USDT balance → if insufficient, decide top-up amount:
-   - If `--topup-amount <usdt>` is supplied (must be ≥ shortfall) → use it
-   - Else if a TTY is attached (user runs CLI directly) → interactively prompt the user to pick `5` / `20` / `50` USDT or a custom amount
-   - Else (headless / agent invocation) → exit with `{ "code": "TOPUP_REQUIRED", ... }` so the caller can ask the user and rerun with `--topup-amount`
+5. Check USDT balance → if insufficient (rare, since Step 1.5 should already have funded), decide top-up amount with the same rules `prepare` uses:
+   - Floor = `max(5, requiredUsdt)` USDT — never a "just enough" decimal
+   - If `--topup-amount <usdt>` is supplied (must be ≥ floor) → use it
+   - Else if a TTY is attached (user runs CLI directly) → interactively prompt the user to pick a tier ≥ floor or a custom amount ≥ floor
+   - Else (headless / agent invocation) → exit with `{ "code": "TOPUP_REQUIRED", "minTopup": <floor>, ... }` so the caller can ask the user and rerun with `--topup-amount`
 6. **If top-up or BNB needed** → initiate WalletConnect funding (opens QR page, waits for user to confirm in wallet app, 5-minute timeout)
 7. `approve` authorization (on-chain tx, costs small amount of BNB, only on first use or when allowance insufficient)
 8. EIP-712 signature (gasless) → re-send the same `GET` URL with `PAYMENT-SIGNATURE` header → server submits transfer and returns generated image URLs
@@ -195,12 +226,12 @@ Output first line:
 - Do not use `run_in_background: true`
 - Do not kill the process before the user finishes scanning
 
-> 🔧 **If `create-image` was accidentally run in background and killed**:
+> 🔧 **If `prepare` or `create-image` was accidentally run in background and killed**:
 > The user's on-chain transaction **may already have been sent** (USDT actually arrived in local wallet).
-> In this case, **do not re-topup**. Instead:
+> In this case, **do not force another top-up**. Instead:
 > 1. Run `agentos wallet` to confirm USDT has arrived
-> 2. If arrived, re-run the original `agentos create-image --prompt "<text>"`
-> 3. If not arrived (user didn't actually scan), re-run `create-image` in foreground
+> 2. If arrived, re-run the original `agentos create-image --prompt "<text>"` (no `--topup-amount`)
+> 3. If not arrived (user didn't actually scan), re-run the same command in foreground
 
 ### 2.2 Scenario Branches
 
@@ -236,10 +267,11 @@ The CLI automatically downloads every `data.images[].url`, then reads each file'
     }
   ],
   "balance": {
+    "initial": "0.05",
     "before": "5.05",
     "after": "4.95",
     "charged": 0.1,
-    "topup": null
+    "topup": "5"
   },
   "data": { /* full server payload */ },
   "paymentResponse": { "txHash": "0x..." }
@@ -256,19 +288,21 @@ Display to the user as a **key-value list** (no fixed-width box, so long paths /
 📐 Dimensions  {width} × {height}
 💾 Size        {sizeHuman}
 🔗 Tx          {transaction}
-💰 Charged     {charged} USDT
-🏦 Balance     {balanceBefore} → {balanceAfter} USDT
+💸 Top-up      {initial} → {before} USDT (+{topup})
+💰 Charged     {before} → {after} USDT (−{charged})
 ```
 
 Rules:
-- Title `✅ Generated` on its own line, then one blank line, then the 7 rows.
+- Title `✅ Generated` on its own line, then one blank line, then the rows.
+- Base layout is 6 fixed rows (Path / Format / Dimensions / Size / Tx, plus the trailing **Charged** row showing the on-chain settlement). The **Top-up** row appears **only when** `balance.topup` is non-null (i.e. the user funded the wallet during this call); skip it entirely when `balance.topup` is `null`.
 - Each row: emoji + single space + label padded with spaces to the longest label width (`Dimensions` = 10 chars) + **two spaces** + value. This keeps values visually aligned in monospace fonts.
 - `{format}`: uppercase the CLI's lowercase value (e.g. `png` → `PNG`).
 - `{width} × {height}`: render with `×` (U+00D7) and single spaces around it.
 - `{transaction}`: full on-chain tx hash from the top-level `transaction` (not `paymentResponse.txHash`).
-- `{charged}`: `balance.charged` from the CLI output (USDT amount deducted this call).
-- `{balanceBefore}` / `{balanceAfter}`: `balance.before` / `balance.after`, rendered with `→` (U+2192) and single spaces around it. If `balance.after` is `null` (post-payment balance query failed), drop the arrow and the after-value, render only `{balanceBefore} USDT (post-balance unavailable)`.
-- Multiple images: render one block per image, separated by a blank line; the `Charged` / `Balance` rows appear once at the end (not per-image).
+- **Top-up row** (only when `balance.topup != null`): shows the wallet balance moving from `balance.initial` to `balance.before` because the user transferred in `balance.topup` USDT. Render as `{initial} → {before} USDT (+{topup})`. The arrow is U+2192 surrounded by single spaces; the `+` sign before `{topup}` is literal.
+- **Charged row**: shows the on-chain x402 settlement, where the wallet moves from `balance.before` (pre-charge balance) to `balance.after` (post-charge balance), the deducted amount is `balance.charged`. Render as `{before} → {after} USDT (−{charged})`. The minus sign is U+2212 (or a regular `-`); both produce a clear "outflow" reading. **Verify visually**: `before − charged` should approximately equal `after` (small RPC rounding is fine).
+- If `balance.after` is `null` (post-payment balance query failed), render the Charged row as `{before} → ? USDT (−{charged})` instead.
+- Multiple images: render one block per image, separated by a blank line; the `Top-up` (if any) and `Charged` rows appear once at the end (not per-image).
 - Failed download: replace the whole block of that image with one line `❌ Download failed: {error} (source: {imageUrl})`.
 
 #### Case B: Funding Signature Timeout (5 minutes)
@@ -293,20 +327,22 @@ CLI returns `Still insufficient USDT after funding` error. Relay to user.
 
 #### Case B.3: Top-up Required (Agent Must Ask User to Choose Amount)
 
-In headless / agent mode (no TTY attached), when the wallet has less USDT than the server-required amount and `--topup-amount` was not supplied, the CLI exits **before** opening any WalletConnect QR — emitting on stderr:
+In headless / agent mode (no TTY attached), when the session key cannot pay the call and `--topup-amount` was not supplied, the CLI exits **before** opening any WalletConnect QR — emitting on stderr:
 
 ```json
 {
-  "error": "USDT insufficient: please choose a top-up amount and rerun with --topup-amount <usdt>.",
+  "error": "USDT balance is below the 5 USDT minimum for this call. Choose a top-up amount and rerun with --topup-amount <usdt>.",
   "code": "TOPUP_REQUIRED",
-  "shortfall": "0.05",
+  "minTopup": 5,
   "required": 0.1,
-  "currentBalance": "0.05",
+  "currentBalance": "0.0099",
   "address": "0x...",
   "presets": [5, 20, 50],
   "hint": "Rerun: agentos create-image --prompt \"<text>\" --topup-amount <usdt>"
 }
 ```
+
+The same JSON shape is also emitted by `agentos prepare` in Step 1.5.B — handle both the same way.
 
 Action:
 
@@ -314,25 +350,29 @@ Action:
 2. Show the user (verbatim copy template — **plain text, no numbered options**):
 
    ```
-   💸 Top up required: shortfall {shortfall} USDT.
+   💸 Top up required (minimum {minTopup} USDT, current balance {currentBalance}).
    Reply with the USDT amount you want to top up.
-   Suggested: {presets joined by " / "} USDT, or any custom amount ≥ {shortfall}.
+   Suggested: {presets joined by " / "} USDT, or any custom amount ≥ {minTopup}.
    ```
 
-   - `{presets joined by " / "}` is the `presets` array joined by ` / ` (e.g. `5 / 20 / 50`). If `presets` is empty, drop the "Suggested" line and ask only for a custom amount ≥ shortfall.
+   - `{presets joined by " / "}` is the `presets` array joined by ` / ` (e.g. `5 / 20 / 50`). If `presets` is empty (extremely high per-call price), drop the "Suggested" line and ask only for a custom amount ≥ `minTopup`.
    - **Never** render the suggestions as numbered/bulleted options like `1) 5 USDT`, `2) 20 USDT`. The user's reply is **always** the literal USDT amount, never a menu index. If the user replies "1", that means **1 USDT**, not "the first preset".
 
 3. Parse the user's reply as a USDT amount (a positive number). The only validation the agent should do is:
    - It parses as a positive number.
-   - It is ≥ `shortfall` from the CLI JSON. If below, ask again quoting the floor — do not silently bump up.
+   - It is ≥ `minTopup` from the CLI JSON. If below, ask again quoting the floor — do not silently bump up.
 
-4. Rerun the original generation with the chosen amount:
+4. Rerun the **same command** that emitted `TOPUP_REQUIRED`, with `--topup-amount <usdt>` appended:
 
    ```bash
+   # if the request came from prepare (Step 1.5)
+   agentos prepare --topup-amount <usdt>
+
+   # if the request came from create-image (Step 2.1, fallback path)
    agentos create-image --prompt "<text>" --topup-amount <usdt>
    ```
 
-   Carry over any other flags from the original call (`--aspect-ratio`, `--output-format`, `--model`, `--output`).
+   For `create-image`, carry over any other flags from the original call (`--aspect-ratio`, `--output-format`, `--model`, `--output`).
 
 5. From here, the CLI proceeds with the WalletConnect QR flow normally — fall through to Case A on success, Case B on signature timeout/rejection, etc.
 
@@ -356,7 +396,7 @@ See [create-image](references/create-image.md) for detailed field descriptions.
 
 ## Step 3: Wallet Management
 
-Trigger: User wants to **check balance / top up / withdraw funds**.
+Trigger: User wants to **check balance / add more funds / withdraw funds**.
 
 ### 3.1 Check Local Wallet Balance
 
@@ -364,17 +404,17 @@ Trigger: User wants to **check balance / top up / withdraw funds**.
 agentos wallet
 ```
 
-Shows local wallet USDT balance and address. If user has previously used `topup`, main wallet balance will also be displayed.
+Shows local wallet USDT balance and address. If `prepare` (or any earlier WalletConnect funding flow) has connected the main wallet at least once, the main wallet balance is displayed too.
 
-### 3.2 Top Up
+### 3.2 Add More USDT
 
 ```bash
-agentos topup --amount <usdt>               # Top up USDT to local wallet
+agentos prepare --topup-amount <usdt>          # Force a transfer (>= 5 USDT) even if already prepared
 ```
 
-`topup` transfers USDT from the main wallet to local wallet via WalletConnect. User confirms **1 transaction** in wallet app.
+`prepare` is the only way the CLI moves USDT from the main wallet into the session key. Without `--topup-amount`, it's a pre-flight that exits immediately when the wallet is already ready. With `--topup-amount` it always opens a WalletConnect QR and transfers the specified amount.
 
-> 💡 No need to top up BNB separately — the `create-image` command auto-requests 0.0003 BNB when it detects insufficient allowance and no BNB.
+> 💡 No need to top up BNB separately — `prepare` auto-requests 0.0003 BNB when it detects no allowance and no BNB.
 
 ### 3.3 Withdraw Funds to Main Wallet
 
@@ -393,7 +433,7 @@ agentos withdraw --to 0xMainWallet --amount <usdt>
 #### Destination Address Resolution Priority
 
 1. CLI argument `--to <address>`
-2. `mainWallet` in `~/.agentos/config.json` (**only available after user has used `topup`**)
+2. `mainWallet` in `~/.agentos/config.json` (**only available after `prepare` (or any other WalletConnect flow) has connected the main wallet at least once**)
 
 #### Output Template (**copy must be verbatim**, variable substitution only)
 
@@ -414,7 +454,7 @@ Status: completed
 | Error | Meaning | Action |
 | --- | --- | --- |
 | `No main wallet address found. Use --to <address>` | No mainWallet in config and no `--to` provided | Ask user to provide destination address |
-| `No USDT to withdraw.` | Local wallet USDT balance is 0 | Inform user nothing to withdraw, suggest `topup` first |
+| `No USDT to withdraw.` | Local wallet USDT balance is 0 | Inform user nothing to withdraw, suggest `prepare` first |
 | `No BNB for gas. ...` | Local wallet has no BNB, cannot pay gas | Prompt user to run `agentos gas` to top up BNB via WalletConnect; see 3.4 |
 | `Requested X USDT but only Y available` | `--amount` exceeds actual balance | Show actual balance, ask user to confirm a new amount |
 | `Withdraw failed: ...` | On-chain transaction failed | Show raw error, suggest retrying later |
@@ -428,7 +468,7 @@ agentos gas                    # Default 0.001 BNB
 agentos gas --amount 0.002     # Custom amount
 ```
 
-⚠️ **This command uses an interactive WalletConnect flow** (same mechanism as `topup`):
+⚠️ **This command uses an interactive WalletConnect flow** (same mechanism as `prepare`):
 - Terminal prints QR code + `wc:` URI
 - User scans with wallet app to connect main wallet
 - Confirms 1 BNB transfer in wallet (amount = `<amount>`, target = local wallet)
@@ -464,8 +504,9 @@ Balance: {bnb} BNB
 | --- | --- |
 | Any first entry / uncertain state | `setup --check` |
 | View current config / wallet address | `setup --show` |
+| Pre-flight before generation (≥5 USDT + facilitator approve) | `prepare` |
 | Generate AI image | `create-image --prompt "<text>"` |
-| Session key USDT insufficient, top up | `topup --amount <n>` |
+| Session key USDT insufficient, top up | `prepare --topup-amount <n>` |
 | Check local wallet balance | `wallet` |
 | Withdraw funds to main wallet | `withdraw [--to <addr>] [--amount <n>]` |
 | Top up BNB for local wallet (pre-withdraw) | `gas [--amount <bnb>]` |
@@ -485,7 +526,7 @@ The following **key phrases** and **line-level output templates** must be **verb
 | Auto-create wallet | `Auto-creating your designated wallet...` |
 | Wallet ready | `0x0...{last4} Ready. Tell me what image you'd like to generate.` |
 | Generate image | `> Generating image...` |
-| Generation success header | `✅ Generated` (followed by blank line + 7-row key-value list; see Case A) |
+| Generation success header | `✅ Generated` (followed by blank line + 6 fixed rows + optional Top-up row when `balance.topup != null`; see Case A) |
 | Signature timeout | `Payment approval timed out. Please try again.` |
 | Signature rejected | `Payment approval was rejected. Please try again if you'd like to proceed.` |
 | Funding flow | `> Funding flow triggered...` |
@@ -497,7 +538,7 @@ The following **key phrases** and **line-level output templates** must be **verb
 
 - `Payment approval timed out. Please try again.`
 - `Payment approval was rejected. Please try again if you'd like to proceed.`
-- `Prompt`, `Image`, `Tx`, `Charged`, `Balance`, `USDT`
+- `Prompt`, `Image`, `Tx`, `Charged`, `Top-up`, `Balance`, `USDT`
 - `From`, `To`, `Amount`, `Status`, `completed`
 - `main wallet` (literal text in the withdraw target line)
 
@@ -513,7 +554,9 @@ The following **key phrases** and **line-level output templates** must be **verb
 | `{sizeHuman}` | `images[].sizeHuman` |
 | `{transaction}` | top-level `transaction` field |
 | `{charged}` | `balance.charged` from `create-image` output (USDT deducted this call) |
-| `{balanceBefore}` / `{balanceAfter}` | `balance.before` / `balance.after` from `create-image` output (USDT) |
+| `{topup}` | `balance.topup` from `create-image` output (USDT funded this call; `null` ⇒ skip Top-up row) |
+| `{initial}` | `balance.initial` from `create-image` output (wallet USDT before any top-up this call) |
+| `{before}` / `{after}` | `balance.before` (USDT before the on-chain charge = after any top-up) / `balance.after` (USDT after the on-chain charge). Should satisfy `before − charged ≈ after`. |
 | `{amount}` | `withdrawn` field from `withdraw` output |
 
 ### Prohibited Deviations
@@ -530,9 +573,9 @@ The following **key phrases** and **line-level output templates** must be **verb
 ## Global Prohibited Behaviors
 
 - **Never** ask the user for a private key; the local wallet is auto-generated by the CLI
-- **Never** execute `create-image` or `topup` without the user supplying / confirming the input (prompt or amount)
+- **Never** execute `create-image` or `prepare --topup-amount` without the user supplying / confirming the input (prompt or amount)
 - **Never** log or display the full private key; addresses are displayed as `0x0...last4` format
 - **Never** skip `setup --check` and directly execute other commands
-- **Never** run `create-image` / `topup` / `gas` / any command with WalletConnect flow in the background (must run in foreground synchronously). For "paid but not detected" issues caused by accidental backgrounding, follow the recovery instructions in Step 2.1
+- **Never** run `prepare` / `create-image` / `gas` / any command with a WalletConnect flow in the background (must run in foreground synchronously). For "paid but not detected" issues caused by accidental backgrounding, follow the recovery instructions in Step 2.1
 - **Do not** auto-retry after funding/signature failure; relay the error to the user and stop
 - **Do not** invent prompt content for the user; if no prompt is given, ask

@@ -17,10 +17,10 @@ Published as both a global npm CLI (`agentos`) and an agent skill compatible wit
 ```bash
 # Run CLI commands directly
 node bin/cli.mjs setup                            # Generate local wallet, show config
+node bin/cli.mjs prepare                          # Pre-flight: ensure ≥5 USDT + facilitator pre-approve (also `--topup-amount <n>` to add more)
 node bin/cli.mjs create-image --prompt "<text>"       # Generate AI image via x402 payment
 node bin/cli.mjs wallet                           # Check USDT/BNB balance
-node bin/cli.mjs topup                            # Transfer USDT via WalletConnect
-node bin/cli.mjs gas                              # Transfer BNB for tx fees
+node bin/cli.mjs gas                              # Transfer BNB for withdraw fees
 node bin/cli.mjs withdraw                         # Reclaim funds from session key
 node bin/cli.mjs clean                            # Uninstall skill & clear cache
 
@@ -46,6 +46,7 @@ No build step — all source is native ES Modules (`.mjs`), executed directly by
 ### Core Modules (`src/`)
 - `x402.mjs` — x402 protocol client: wraps axios with EIP-712 signing via `@aeon-ai-pay/axios` + `@aeon-ai-pay/evm`. `fetchPaymentRequirements()` does an unsigned GET expecting HTTP 402 and parses the `accepts[0]` payload. Also installs an axios interceptor that captures `orderNo` from the 402 body for later correlation.
 - `walletconnect.mjs` — WalletConnect v2 integration: QR code UI (custom HTML page served by a local status server), session lifecycle, ERC20 transfers (USDT + BNB). Largest file in the codebase (~45 KB) — most non-trivial logic lives here.
+- `funding.mjs` — High-level funding orchestration shared by `prepare` and `create-image`. Exports `fundSessionKey({ sessionAddress, usdtAmount, needGas })` (one WalletConnect session, transfers USDT and/or 0.0003 BNB), `approveFacilitator(privateKey)` (session key broadcasts `ERC20.approve(facilitator, MaxUint256)` directly on-chain), and `promptTopupAmount(minTopup)` (TTY-only tier picker). Also defines the `MIN_TOPUP_USDT = 5` floor and `TOPUP_PRESETS = [5, 20, 50]` tiers.
 - `balance.mjs` — EVM balance/allowance queries via Viem public client on BSC (`getWalletBalance`, `getAllowance`).
 - `config.mjs` — Config persistence at `~/.agentos/config.json` (mode 0o600). `resolve(cliValue, envKey, configKey)` enforces the priority chain **CLI args > env vars > config file**. Default `serviceUrl` falls back to `https://aeon-qrpay-dev.alchemytech.cc`.
 - `constants.mjs` — BSC RPC URL (QuickNode), USDT BEP-20 address, x402 facilitator address, WalletConnect default project ID and 5-minute timeout.
@@ -54,15 +55,17 @@ No build step — all source is native ES Modules (`.mjs`), executed directly by
 ### Command Modules (`src/commands/`)
 Each command module exports a single async function. Pattern: parse options → `resolve()` config (CLI > env > file) → call shared utilities → write JSON to stdout or error JSON to stderr → `process.exit(0|1)`.
 
-**`create-image.mjs` is the orchestration hot path.** It chains: `fetchPaymentRequirements` → `getWalletBalance` + `getAllowance` → optional `inlineWalletConnectTopup` (USDT top-up + 0.0003 BNB if no BNB and approve needed) → re-check balances → x402 EIP-712 sign and retry the same URL with `PAYMENT-SIGNATURE` header → download every `data.images[].url` to `~/agentos-images/` and parse PNG/JPEG/WebP headers in-process for width/height/size. After payment, re-queries USDT balance and emits a `balance: { before, after, charged, topup }` field in the result JSON for the agent to display.
+**`prepare.mjs` is the proactive entry point.** Reads session key balance + allowance, and if either USDT < `MIN_TOPUP_USDT` (5) or `allowance == 0` it triggers `funding.fundSessionKey` (USDT + optional 0.0003 BNB in one WalletConnect session) followed by `funding.approveFacilitator` (session key signs and broadcasts `ERC20.approve(facilitator, MaxUint256)` directly). After this completes the wallet is gasless-ready — every subsequent x402 generation only needs an EIP-712 signature.
 
-**Top-up amount selection** (3-way branch when USDT is short):
-1. `--topup-amount <usdt>` supplied → CLI uses it directly (must be ≥ shortfall, else exits with `TOPUP_AMOUNT_TOO_SMALL`).
-2. TTY attached, no `--topup-amount` → CLI interactively prompts the user to pick from `[5, 20, 50]` USDT or a custom value (≥ shortfall).
-3. Non-TTY (agent invocation), no `--topup-amount` → CLI exits **before** opening WalletConnect with a JSON containing `code: "TOPUP_REQUIRED"`, `shortfall`, `presets`, etc. The agent surfaces the choices to the user and reruns the same command with `--topup-amount`. This avoids opening a QR session that the agent can't dismiss to ask for input.
+**`create-image.mjs` is the lazy fallback.** It chains: `fetchPaymentRequirements` → `getWalletBalance` + `getAllowance` → if balance is short, **same** funding flow as `prepare` (calls `funding.fundSessionKey`) → re-check balances → x402 EIP-712 sign and retry the same URL with `PAYMENT-SIGNATURE` header → download every `data.images[].url` to `~/agentos-images/` and parse PNG/JPEG/WebP headers in-process for width/height/size. In normal usage `prepare` has already funded + approved, so this top-up branch is rarely hit; when it is, the floor is `max(5, requiredUsdt)` — never a "just enough" decimal. The result JSON exposes a `balance: { initial, before, after, charged, topup }` field where `initial` is the wallet USDT before any funding, `before` is after the WalletConnect top-up (or = `initial` if none), and `after` is after the on-chain x402 settlement — chosen so that `initial + topup ≈ before` and `before − charged ≈ after` reconcile, letting the agent render a 3-snapshot money flow (initial → before → after) instead of a single misleading initial→after delta.
+
+**Top-up amount selection** is centralized in `funding.promptTopupAmount(minTopup)` and reused by both `prepare` and `create-image`. The floor is `max(MIN_TOPUP_USDT=5, ceil(shortfall))` — for `prepare` it's always 5; for `create-image` fallback it's 5 today (per-call price ≪ 5) but auto-rises if a future capability charges > 5 USDT. 3-way branch when funding is needed:
+1. `--topup-amount <usdt>` supplied → CLI uses it directly (must be ≥ floor, else exits with `TOPUP_AMOUNT_TOO_SMALL`).
+2. TTY attached, no `--topup-amount` → CLI interactively prompts the user to pick from preset tiers (those ≥ floor) or a custom value (≥ floor).
+3. Non-TTY (agent invocation), no `--topup-amount` → CLI exits **before** opening WalletConnect with a JSON containing `code: "TOPUP_REQUIRED"`, `minTopup`, `presets`, etc. The agent surfaces the choices to the user and reruns the same command with `--topup-amount`. This avoids opening a QR session that the agent can't dismiss to ask for input.
 
 ### Interactive WalletConnect Constraints
-`create-image`, `topup`, and `gas` all open a local QR page and block waiting for the user to scan in their wallet app (5-minute timeout from `WC_CONNECT_TIMEOUT_MS`). **Never run these commands with `run_in_background: true` and never kill the process while the user is mid-scan** — the on-chain transfer may have already been broadcast, leaving funds in the local wallet that the user paid for but didn't get credited toward generation. Recovery: run `agentos wallet` to check, then re-run `create-image` (do NOT re-topup).
+`prepare`, `create-image` (when funding fallback fires), and `gas` all open a local QR page and block waiting for the user to scan in their wallet app (5-minute timeout from `WC_CONNECT_TIMEOUT_MS`). **Never run these commands with `run_in_background: true` and never kill the process while the user is mid-scan** — the on-chain transfer may have already been broadcast, leaving funds in the local wallet that the user paid for but didn't get credited toward generation. Recovery: run `agentos wallet` to check, then re-run the same command without forcing another top-up.
 
 ### Key Architectural Concepts
 
@@ -70,7 +73,7 @@ Each command module exports a single async function. Pattern: parse options → 
 
 **x402 Payment Flow**: `GET /open/ai/x402/skillBoss/create?body=<urlencoded JSON> (decoded { model, inputs: { prompt, aspect_ratio, output_format } }) → HTTP 402 + requirements → client EIP-712 sign → retry same URL with PAYMENT-SIGNATURE → HTTP 200 + { transaction, data: { images: [{url}] } } → CLI downloads & parses meta`. Server endpoint is Spring `@GetMapping("/create") create(@RequestParam String body, ...)`.
 
-**Gas Model**: One-time `approve` tx requires BNB (~0.0003). Each generation itself is gasless (server-paid). Withdrawal requires BNB for direct on-chain transfer.
+**Gas Model**: One-time `approve` tx requires BNB (~0.0003) and is broadcast by the session key during `prepare` (or, as a fallback, lazily by the SDK on the first `create-image` call). Each subsequent generation is gasless (server-paid via x402 facilitator with EIP-712 signature). Withdrawal requires BNB for direct on-chain transfer.
 
 **Pricing Model**: Per-call USDT amount is decided by the server in the 402 response, not hardcoded client-side. The wallet is charged exactly that amount. Top-up amount is user-selected from `[5, 20, 50]` USDT or a custom value (with a floor of `requiredUsdt - currentBalance`); see "Top-up amount selection" above for the 3-way branching by `--topup-amount` flag / TTY presence.
 
