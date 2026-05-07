@@ -57,7 +57,7 @@ npx @aeon-ai-pay/agentos clean
 
 ## Prerequisites
 
-- Node.js >= 18
+- Node.js >= 25
 - A mobile wallet app with WalletConnect support (MetaMask, OKX Wallet, Trust Wallet, etc.)
 - USDT (BEP-20) on BSC for image-generation payments
 - A small amount of BNB for approve gas (~$0.002/tx, only needed on first authorization)
@@ -66,8 +66,9 @@ npx @aeon-ai-pay/agentos clean
 
 ```
 1. CLI auto-generates a session key (disposable wallet) locally
-2. On generate, if balance is insufficient, auto-funds via WalletConnect QR scan (USDT + BNB gas)
-   - Top-up amount = exactly the shortfall (requiredUsdt - currentBalance)
+2. On generate, if balance is insufficient, funds via WalletConnect QR scan (USDT + BNB gas)
+   - In an interactive terminal, you pick a top-up tier (5 / 20 / 50 USDT or a custom amount, ≥ shortfall)
+   - When invoked headlessly (e.g. by an agent), auto-funds exactly the shortfall (requiredUsdt - currentBalance)
 3. First use requires a one-time approve authorization (unlimited allowance, no repeat needed)
 4. Session key auto-signs the x402 payment — no manual confirmation required
 5. Server returns the generated image (URLs); CLI downloads each, reads dimensions/size
@@ -86,7 +87,8 @@ Agent flow:
 ## Pricing
 
 - Per-call USDT amount is **decided by the server** in the 402 response — not hardcoded client-side.
-- The wallet is charged exactly that amount. Top-up covers exactly the shortfall (`requiredUsdt - currentBalance`).
+- The wallet is charged exactly that amount.
+- Top-up: in an interactive terminal you choose `5` / `20` / `50` USDT (or a custom amount ≥ shortfall); headless callers auto-fund exactly `requiredUsdt - currentBalance`.
 
 ## Configuration
 

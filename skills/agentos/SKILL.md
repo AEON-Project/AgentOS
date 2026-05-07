@@ -17,7 +17,7 @@ description: >
 emoji: "🤖"
 homepage: https://github.com/AEON-Project/AgentOS
 metadata:
-  version: "0.1.0"
+  version: "0.1.1"
   author: AEON-Project
   openclaw:
     requires:
@@ -27,7 +27,7 @@ metadata:
     primaryEnv: AGENTOS_SERVICE_URL
     user-invocable: true
     disable-model-invocation: false
-compatibility: Requires Node.js >= 18 and npm
+compatibility: Requires Node.js >= 25 and npm
 ---
 
 # AEON AgentOS Skill — AI Image Generation (x402)
@@ -109,7 +109,7 @@ CLI behavior:
 2. If `privateKey` is missing → generates a new private key locally with `viem.generatePrivateKey()` and saves it
 3. Returns JSON: `{ ready, created, mode, address, mainWallet, serviceUrl }`
 
-> 💰 **Pricing**: per-call USDT is decided by the x402 server (returned in the 402 response). Top-up covers exactly `requiredUsdt - currentBalance` when the wallet is short. No client-side minimum / floor.
+> 💰 **Pricing**: per-call USDT is decided by the x402 server (returned in the 402 response). When the wallet is short, the CLI prompts the user in an interactive terminal to choose a top-up tier (`5` / `20` / `50` USDT or a custom amount, ≥ shortfall); when invoked headlessly (e.g. by an agent without an attached TTY), it auto-funds exactly `requiredUsdt - currentBalance`.
 
 ### Output Templates
 
@@ -155,7 +155,7 @@ Trigger: User wants to **generate / create / draw / render** an image.
 - If the user has not yet supplied a prompt, ask (verbatim):
   > What image would you like me to generate? Describe it in a sentence or two.
 - Once the user gives a prompt, **execute immediately** — no second confirmation needed. Proceed to 2.1.
-- Actual deduction per generation is decided by the x402 server (returned in the 402 response). If the wallet has less than the server-required amount, the CLI auto-triggers WalletConnect funding in 2.1 (covering exactly the shortfall) — do not pre-call `topup`.
+- Actual deduction per generation is decided by the x402 server (returned in the 402 response). If the wallet has less than the server-required amount, the CLI auto-triggers WalletConnect funding in 2.1 — do not pre-call `topup`. In a TTY the user is asked to pick a top-up tier (`5` / `20` / `50` USDT or a custom value ≥ shortfall); in headless agent mode the CLI funds exactly the shortfall.
 
 ### 2.1 Execute Generation
 
@@ -229,6 +229,12 @@ The CLI automatically downloads every `data.images[].url`, then reads each file'
       "sizeHuman": "992.4 KB"
     }
   ],
+  "balance": {
+    "before": "5.05",
+    "after": "4.95",
+    "charged": 0.1,
+    "topup": null
+  },
   "data": { /* full server payload */ },
   "paymentResponse": { "txHash": "0x..." }
 }
@@ -244,15 +250,19 @@ Display to the user as a **key-value list** (no fixed-width box, so long paths /
 📐 Dimensions  {width} × {height}
 💾 Size        {sizeHuman}
 🔗 Tx          {transaction}
+💰 Charged     {charged} USDT
+🏦 Balance     {balanceBefore} → {balanceAfter} USDT
 ```
 
 Rules:
-- Title `✅ Generated` on its own line, then one blank line, then the 5 rows.
+- Title `✅ Generated` on its own line, then one blank line, then the 7 rows.
 - Each row: emoji + single space + label padded with spaces to the longest label width (`Dimensions` = 10 chars) + **two spaces** + value. This keeps values visually aligned in monospace fonts.
 - `{format}`: uppercase the CLI's lowercase value (e.g. `png` → `PNG`).
 - `{width} × {height}`: render with `×` (U+00D7) and single spaces around it.
 - `{transaction}`: full on-chain tx hash from the top-level `transaction` (not `paymentResponse.txHash`).
-- Multiple images: render one block per image, separated by a blank line.
+- `{charged}`: `balance.charged` from the CLI output (USDT amount deducted this call).
+- `{balanceBefore}` / `{balanceAfter}`: `balance.before` / `balance.after`, rendered with `→` (U+2192) and single spaces around it. If `balance.after` is `null` (post-payment balance query failed), drop the arrow and the after-value, render only `{balanceBefore} USDT (post-balance unavailable)`.
+- Multiple images: render one block per image, separated by a blank line; the `Charged` / `Balance` rows appear once at the end (not per-image).
 - Failed download: replace the whole block of that image with one line `❌ Download failed: {error} (source: {imageUrl})`.
 
 #### Case B: Funding Signature Timeout (5 minutes)
@@ -422,7 +432,7 @@ The following **key phrases** and **line-level output templates** must be **verb
 | Auto-create wallet | `Auto-creating your designated wallet...` |
 | Wallet ready | `0x0...{last4} Ready. Tell me what image you'd like to generate.` |
 | Generate image | `> Generating image...` |
-| Generation success header | `✅ Generated` (followed by blank line + 5-row key-value list; see Case A) |
+| Generation success header | `✅ Generated` (followed by blank line + 7-row key-value list; see Case A) |
 | Signature timeout | `Payment approval timed out. Please try again.` |
 | Signature rejected | `Payment approval was rejected. Please try again if you'd like to proceed.` |
 | Funding flow | `> Funding flow triggered...` |
@@ -434,7 +444,7 @@ The following **key phrases** and **line-level output templates** must be **verb
 
 - `Payment approval timed out. Please try again.`
 - `Payment approval was rejected. Please try again if you'd like to proceed.`
-- `Prompt`, `Image`, `Tx`
+- `Prompt`, `Image`, `Tx`, `Charged`, `Balance`, `USDT`
 - `From`, `To`, `Amount`, `Status`, `completed`
 - `main wallet` (literal text in the withdraw target line)
 
@@ -449,6 +459,8 @@ The following **key phrases** and **line-level output templates** must be **verb
 | `{width}` / `{height}` | `images[].width` / `images[].height` |
 | `{sizeHuman}` | `images[].sizeHuman` |
 | `{transaction}` | top-level `transaction` field |
+| `{charged}` | `balance.charged` from `create-image` output (USDT deducted this call) |
+| `{balanceBefore}` / `{balanceAfter}` | `balance.before` / `balance.after` from `create-image` output (USDT) |
 | `{amount}` | `withdrawn` field from `withdraw` output |
 
 ### Prohibited Deviations

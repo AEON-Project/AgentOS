@@ -78,6 +78,12 @@ CLI emits to stdout:
       "sizeHuman": "992.4 KB"
     }
   ],
+  "balance": {
+    "before": "5.05",
+    "after": "4.95",
+    "charged": 0.1,
+    "topup": null
+  },
   "data": { /* full server payload */ },
   "paymentResponse": { "txHash": "0x...", "networkId": "eip155:56" }
 }
@@ -87,6 +93,7 @@ Notes:
 - `transaction` (top-level) is the on-chain tx hash returned by the server. Display this — not `paymentResponse.txHash` — in the user-facing table.
 - `format/width/height/sizeBytes/sizeHuman` come from local parsing of the downloaded file (PNG/JPEG/WebP headers). Fields may be `null` if the format is unknown.
 - A failed download yields `{ url, error }` (no `localPath`/format/dimensions).
+- `balance.before` is the USDT balance read before payment; `balance.after` is read after the x402 settlement (may be `null` if the post-payment RPC query failed). `balance.charged` is the USDT amount the server deducted this call. `balance.topup` is the USDT amount the user transferred in via WalletConnect during this run, or `null` if no top-up was needed.
 
 ## User-Facing Display Template
 
@@ -100,16 +107,19 @@ After parsing the JSON, render each image as a **key-value list** (not a fixed-w
 📐 Dimensions  {width} × {height}
 💾 Size        {sizeHuman}
 🔗 Tx          {transaction}
+💰 Charged     {charged} USDT
+🏦 Balance     {balanceBefore} → {balanceAfter} USDT
 ```
 
 Rules:
-- `✅ Generated` verbatim, then one blank line, then 5 rows.
+- `✅ Generated` verbatim, then one blank line, then 7 rows.
 - Each row: emoji + space + label padded to the longest label width (`Dimensions` = 10) + two spaces + value.
 - `{FORMAT}` = uppercase of `images[].format` (e.g. `png` → `PNG`).
 - `{width} × {height}` uses U+00D7 with single spaces around it.
 - `{transaction}` = full top-level tx hash (not `paymentResponse.txHash`).
-- Multiple images → one block per image, separated by a blank line.
-- Failed download → one line `❌ Download failed: {error} (source: {imageUrl})` instead of the 5-row block.
+- `{charged}` = `balance.charged`; `{balanceBefore}` / `{balanceAfter}` = `balance.before` / `balance.after`. The arrow is U+2192 with single spaces. If `balance.after` is `null`, drop the arrow and after-value, render only `{balanceBefore} USDT (post-balance unavailable)`.
+- Multiple images → one block per image, separated by a blank line; the `Charged` / `Balance` rows appear once at the end (not per-image).
+- Failed download → one line `❌ Download failed: {error} (source: {imageUrl})` instead of the per-image block.
 
 ## Error Handling
 
@@ -121,9 +131,11 @@ Rules:
 | User rejected signature | `Payment approval was rejected. Please try again if you'd like to proceed.` | Relay; do not auto-retry |
 | Insufficient balance after funding | `Still insufficient USDT after funding.` | Relay |
 | Server network error | Error JSON | Suggest retry / check `serviceUrl` |
-| Image download failed | Entry has `error` instead of `localPath` | Show single line `❌ Download failed: {error} (source: {imageUrl})` instead of the 5-row block |
+| Image download failed | Entry has `error` instead of `localPath` | Show single line `❌ Download failed: {error} (source: {imageUrl})` instead of the per-image block |
 
 ## Pricing Model
 
 - Per-call USDT amount is **decided by the server** in the 402 response — not hardcoded client-side.
-- Top-up covers exactly the shortfall: `requiredUsdt - currentBalance`.
+- Top-up amount selection:
+  - **Interactive terminal (TTY)**: CLI prompts the user to choose a tier from `[5, 20, 50]` USDT or a custom amount. Tiers below the shortfall are filtered out, and the custom value must be ≥ shortfall.
+  - **Headless (non-TTY)**: CLI auto-funds exactly the shortfall (`requiredUsdt - currentBalance`) — preserving the original behavior so agent skills don't need the user to make a selection.

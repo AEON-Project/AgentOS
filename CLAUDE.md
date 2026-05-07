@@ -32,25 +32,34 @@ npm run wallet
 node scripts/release.mjs
 ```
 
-No build step — all source is native ES Modules (`.mjs`), executed directly by Node.js >=18. No test suite exists.
+No build step — all source is native ES Modules (`.mjs`), executed directly by Node.js. **Requires Node.js >= 25** (enforced by a hard check at the top of `bin/cli.mjs` and the `engines` field in `package.json`). No test suite exists.
+
+**Stdout vs stderr convention**: command modules write structured JSON results (final success/failure payload) to **stdout** via `console.log`, and write all progress / status / human-readable diagnostics to **stderr** via `console.error`. Errors are also emitted as JSON on stderr before `process.exit(1)`. When piping output, only stdout is parseable JSON.
 
 ## Architecture
 
 ### Entry Points
-- `bin/cli.mjs` — Commander.js CLI definition, lazy-loads command modules
-- `skills/agentos/SKILL.md` — Agent skill specification (triggers, opening protocol, workflow)
-- `scripts/postinstall.mjs` — Auto-installs skill into detected AI coding agents on `npm install`
+- `bin/cli.mjs` — Commander.js CLI definition, lazy-loads command modules. Also contains a global `uncaughtException` guard for a known WalletConnect v2 relay bug (`isJsonRpcPayload` null-frame TypeError) — do not remove this guard.
+- `skills/agentos/SKILL.md` — Agent skill specification (triggers, opening protocol, workflow). Contains **verbatim copy constraints** for output templates that an agent operator must reproduce exactly (see "Copy Consistency Constraints" in that file).
+- `scripts/postinstall.mjs` — Auto-installs skill into detected AI coding agents on `npm install -g`. First tries `npx skills add ...`; falls back to copying `skills/agentos/` directly into `~/.claude/skills/agentos/`.
 
 ### Core Modules (`src/`)
-- `x402.mjs` — x402 protocol client: wraps axios with EIP-712 signing, parses 402 payment requirements
-- `walletconnect.mjs` — WalletConnect v2 integration: QR code UI (custom HTML page), local status server, ERC20 transfers (USDT + BNB)
-- `balance.mjs` — EVM balance/allowance queries via Viem public client on BSC
-- `config.mjs` — Config persistence at `~/.agentos/config.json` (mode 0o600). Priority: CLI args > env vars > config file
-- `constants.mjs` — BSC addresses, RPC URL, WalletConnect timeouts
-- `update-check.mjs` — Background auto-update detection via `npm view`
+- `x402.mjs` — x402 protocol client: wraps axios with EIP-712 signing via `@aeon-ai-pay/axios` + `@aeon-ai-pay/evm`. `fetchPaymentRequirements()` does an unsigned GET expecting HTTP 402 and parses the `accepts[0]` payload. Also installs an axios interceptor that captures `orderNo` from the 402 body for later correlation.
+- `walletconnect.mjs` — WalletConnect v2 integration: QR code UI (custom HTML page served by a local status server), session lifecycle, ERC20 transfers (USDT + BNB). Largest file in the codebase (~45 KB) — most non-trivial logic lives here.
+- `balance.mjs` — EVM balance/allowance queries via Viem public client on BSC (`getWalletBalance`, `getAllowance`).
+- `config.mjs` — Config persistence at `~/.agentos/config.json` (mode 0o600). `resolve(cliValue, envKey, configKey)` enforces the priority chain **CLI args > env vars > config file**. Default `serviceUrl` falls back to `https://aeon-qrpay-dev.alchemytech.cc`.
+- `constants.mjs` — BSC RPC URL (QuickNode), USDT BEP-20 address, x402 facilitator address, WalletConnect default project ID and 5-minute timeout.
+- `update-check.mjs` — Background auto-update detection via `npm view`.
 
 ### Command Modules (`src/commands/`)
-Each command module exports a single async function. Pattern: parse options → load/validate config → call shared utilities → output JSON or error.
+Each command module exports a single async function. Pattern: parse options → `resolve()` config (CLI > env > file) → call shared utilities → write JSON to stdout or error JSON to stderr → `process.exit(0|1)`.
+
+**`create-image.mjs` is the orchestration hot path.** It chains: `fetchPaymentRequirements` → `getWalletBalance` + `getAllowance` → optional `inlineWalletConnectTopup` (USDT top-up + 0.0003 BNB if no BNB and approve needed) → re-check balances → x402 EIP-712 sign and retry the same URL with `PAYMENT-SIGNATURE` header → download every `data.images[].url` to `~/agentos-images/` and parse PNG/JPEG/WebP headers in-process for width/height/size. After payment, re-queries USDT balance and emits a `balance: { before, after, charged, topup }` field in the result JSON for the agent to display.
+
+**Top-up amount selection**: when USDT is short, the CLI prompts the user (TTY only) to pick from preset tiers `[5, 20, 50]` USDT or a custom amount, with a hard floor of `requiredUsdt - currentBalance` (the shortfall). In non-TTY mode (e.g. agent-driven invocation without an attached terminal), the CLI falls back to auto-funding exactly the shortfall — preserving the original behavior so existing agent skills don't break.
+
+### Interactive WalletConnect Constraints
+`create-image`, `topup`, and `gas` all open a local QR page and block waiting for the user to scan in their wallet app (5-minute timeout from `WC_CONNECT_TIMEOUT_MS`). **Never run these commands with `run_in_background: true` and never kill the process while the user is mid-scan** — the on-chain transfer may have already been broadcast, leaving funds in the local wallet that the user paid for but didn't get credited toward generation. Recovery: run `agentos wallet` to check, then re-run `create-image` (do NOT re-topup).
 
 ### Key Architectural Concepts
 
@@ -60,7 +69,7 @@ Each command module exports a single async function. Pattern: parse options → 
 
 **Gas Model**: One-time `approve` tx requires BNB (~0.0003). Each generation itself is gasless (server-paid). Withdrawal requires BNB for direct on-chain transfer.
 
-**Pricing Model**: Per-call USDT amount is decided by the server in the 402 response, not hardcoded client-side. The wallet is charged exactly that amount. Top-up covers exactly the shortfall (`requiredUsdt - currentBalance`).
+**Pricing Model**: Per-call USDT amount is decided by the server in the 402 response, not hardcoded client-side. The wallet is charged exactly that amount. Top-up amount in TTY mode is user-selected from `[5, 20, 50]` USDT or a custom value, with a floor of `requiredUsdt - currentBalance`; non-TTY callers auto-fund exactly the shortfall.
 
 ## Key Dependencies
 - `viem` — EVM client (balance queries, contract reads)

@@ -15,10 +15,12 @@ import { homedir } from "node:os";
 import { URL } from "node:url";
 import { get as httpsGet } from "node:https";
 import { get as httpGet } from "node:http";
+import { createInterface } from "node:readline/promises";
 
 const AUTO_GAS_BNB = "0.0003";
 const DEFAULT_IMAGE_DIR = join(homedir(), "agentos-images");
 const DEFAULT_MODEL = "replicate/black-forest-labs/flux-schnell";
+const TOPUP_PRESETS = [5, 20, 50];
 
 export async function generate(opts) {
   console.error("Generating image...");
@@ -70,10 +72,12 @@ export async function generate(opts) {
   let needGas = false;
   let sessionAddress;
   let topupAmount = null;
+  let balanceBeforeUsdt = null;
 
   try {
     const { address, usdt, bnb, bnbRaw } = await getWalletBalance(privateKey);
     sessionAddress = address;
+    balanceBeforeUsdt = usdt;
     const usdtNum = parseFloat(usdt);
 
     console.error(`Wallet: ${address}`);
@@ -98,8 +102,13 @@ export async function generate(opts) {
     if (usdtNum < requiredUsdt) {
       needTopup = true;
       const shortfall = requiredUsdt - usdtNum;
-      topupAmount = shortfall.toFixed(6);
-      console.error(`USDT insufficient: have ${usdtNum}, need ${requiredUsdt}, shortfall ${topupAmount}`);
+      console.error(`USDT insufficient: have ${usdtNum}, need ${requiredUsdt}, shortfall ${shortfall.toFixed(6)}`);
+      if (process.stdin.isTTY) {
+        topupAmount = await promptTopupAmount(shortfall);
+        console.error(`Selected top-up amount: ${topupAmount} USDT`);
+      } else {
+        topupAmount = shortfall.toFixed(6);
+      }
     }
   } catch (e) {
     console.error(JSON.stringify({ error: `Balance check failed: ${e.message}` }));
@@ -197,6 +206,14 @@ export async function generate(opts) {
       }
     }
 
+    let balanceAfterUsdt = null;
+    try {
+      const after = await getWalletBalance(privateKey);
+      balanceAfterUsdt = after.usdt;
+    } catch (e) {
+      console.error(`Post-payment balance check failed: ${e.message}`);
+    }
+
     const result = {
       success: true,
       prompt,
@@ -205,6 +222,12 @@ export async function generate(opts) {
       model,
       transaction,
       images: downloaded,
+      balance: {
+        before: balanceBeforeUsdt,
+        after: balanceAfterUsdt,
+        charged: requiredUsdt,
+        topup: topupAmount,
+      },
       data: response.data,
       paymentResponse,
     };
@@ -220,6 +243,45 @@ export async function generate(opts) {
     };
     console.error(JSON.stringify(result, null, 2));
     process.exit(1);
+  }
+}
+
+async function promptTopupAmount(shortfall) {
+  const presets = TOPUP_PRESETS.filter((v) => v >= shortfall);
+  const customIdx = presets.length + 1;
+
+  console.error("");
+  console.error(`Choose top-up amount (need at least ${shortfall.toFixed(6)} USDT):`);
+  presets.forEach((v, i) => {
+    console.error(`  ${i + 1}) ${v} USDT`);
+  });
+  console.error(`  ${customIdx}) Custom amount`);
+
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    while (true) {
+      const ans = (await rl.question(`Enter choice [1-${customIdx}]: `)).trim();
+      const n = Number(ans);
+      if (Number.isInteger(n) && n >= 1 && n <= presets.length) {
+        return String(presets[n - 1]);
+      }
+      if (Number.isInteger(n) && n === customIdx) {
+        const custom = (await rl.question(`Enter USDT amount (>= ${shortfall.toFixed(6)}): `)).trim();
+        const cn = Number(custom);
+        if (!Number.isFinite(cn) || cn <= 0) {
+          console.error("Invalid amount, please retry.");
+          continue;
+        }
+        if (cn < shortfall) {
+          console.error(`Amount must be at least ${shortfall.toFixed(6)} USDT.`);
+          continue;
+        }
+        return custom;
+      }
+      console.error("Invalid choice, please retry.");
+    }
+  } finally {
+    rl.close();
   }
 }
 
