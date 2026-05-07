@@ -17,7 +17,7 @@ description: >
 emoji: "🤖"
 homepage: https://github.com/AEON-Project/AgentOS
 metadata:
-  version: "0.1.5"
+  version: "0.1.6"
   author: AEON-Project
   openclaw:
     requires:
@@ -164,9 +164,49 @@ CLI behavior:
    - Transfer 0.0003 BNB for approve gas (only if a fresh approve is needed and the session key has no BNB).
    - Session key broadcasts `ERC20.approve(facilitator, MaxUint256)` once → confirmed → `{ "ready": true, "approveTx": "0x..." }` on stdout.
 
-### 1.5.A — Already prepared
+### 1.5.A — Already prepared (silent)
 
-CLI prints `Wallet already prepared (...)` to stderr and JSON `{ "ready": true, ... }` on stdout. Proceed to Step 2 silently — do not surface anything to the user.
+When the CLI exits ready **without** doing any funding (`balance.topup === null` AND `approveTx === null` in the stdout JSON), it has only verified state. Proceed to Step 2 silently — do not surface anything to the user.
+
+### 1.5.D — Funding completed (show summary)
+
+When the CLI exits ready **after** actually funding/approving (i.e. `topup !== null` OR `approveTx !== null` in the stdout JSON), display the result to the user using the verbatim template below so the WalletConnect work the user just did is acknowledged in plain text.
+
+Stdout JSON (`agentos prepare` success after funding):
+```json
+{
+  "ready": true,
+  "address": "0x1e175b01Fa8e06a8541E3f96C304D5D569933b4b",
+  "initialUsdt": "0",
+  "usdt": "5",
+  "bnb": "0.0003",
+  "allowance": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+  "topup": "5",
+  "approveTx": "0xabc...def"
+}
+```
+
+Display template (verbatim, variable substitution only):
+
+```
+✅ Wallet prepared
+
+💸 Top-up    {initialUsdt} → {usdt} USDT (+{topup})
+🔓 Approve   {approveTx}
+🏦 Balance   {usdt} USDT
+🔗 Address   0x0...{last4}
+```
+
+Rules:
+- Title `✅ Wallet prepared` on its own line, then one blank line, then the rows.
+- Each row: emoji + single space + label padded with spaces to the longest label width here (`Approve` / `Balance` / `Address` = 7 chars) + **two spaces** + value. So `Top-up` (6 chars) gets one extra padding space before the two-space gap; the others get zero extra padding.
+- The **Top-up** row appears only when `balance.topup !== null`. Render `{initialUsdt} → {usdt} USDT (+{topup})` using `→` (U+2192) with single spaces and a literal `+` before `{topup}`. Skip the row entirely when `topup === null`.
+- The **Approve** row appears only when `approveTx !== null` (a fresh approval was broadcast this run). Skip the row entirely when `approveTx === null`.
+- The **Balance** row always renders the post-funding USDT balance (`balance.usdt`).
+- The **Address** row always renders the session-key address truncated to `0x0...{last4}` (last 4 hex chars).
+- If only `approveTx` was performed (no top-up): omit the Top-up row, keep Approve/Balance/Address.
+- If only top-up was performed (no fresh approve, e.g. user added more funds via `--topup-amount`): omit the Approve row, keep Top-up/Balance/Address.
+- After displaying the summary, proceed to Step 2 (ask the user for the prompt) — do not idle.
 
 ### 1.5.B — Headless top-up required (agent path)
 
@@ -531,6 +571,7 @@ The following **key phrases** and **line-level output templates** must be **verb
 | Wallet ready | `0x0...{last4} Ready. Tell me what image you'd like to generate.` |
 | Generate image | `> Generating image...` |
 | Generation success header | `✅ Generated` (followed by blank line + 6 fixed rows + optional Top-up row when `balance.topup != null`; see Case A) |
+| Prepare success header | `✅ Wallet prepared` (followed by blank line + Balance/Address rows + optional Top-up/Approve rows; see 1.5.D) |
 | Signature timeout | `Payment approval timed out. Please try again.` |
 | Signature rejected | `Payment approval was rejected. Please try again if you'd like to proceed.` |
 | Funding flow | `> Funding flow triggered...` |
@@ -542,7 +583,7 @@ The following **key phrases** and **line-level output templates** must be **verb
 
 - `Payment approval timed out. Please try again.`
 - `Payment approval was rejected. Please try again if you'd like to proceed.`
-- `Prompt`, `Image`, `Tx`, `Charged`, `Top-up`, `Balance`, `USDT`
+- `Prompt`, `Image`, `Tx`, `Charged`, `Top-up`, `Approve`, `Balance`, `Address`, `USDT`
 - `From`, `To`, `Amount`, `Status`, `completed`
 - `main wallet` (literal text in the withdraw target line)
 
@@ -558,9 +599,11 @@ The following **key phrases** and **line-level output templates** must be **verb
 | `{sizeHuman}` | `images[].sizeHuman` |
 | `{transaction}` | top-level `transaction` field |
 | `{charged}` | `balance.charged` from `create-image` output (USDT deducted this call) |
-| `{topup}` | `balance.topup` from `create-image` output (USDT funded this call; `null` ⇒ skip Top-up row) |
-| `{initial}` | `balance.initial` from `create-image` output (wallet USDT before any top-up this call) |
+| `{topup}` | `balance.topup` from `create-image` (or top-level `topup` from `prepare`) — USDT funded this call; `null` ⇒ skip Top-up row |
+| `{initial}` | `balance.initial` from `create-image` (wallet USDT before any top-up this call) |
 | `{before}` / `{after}` | `balance.before` (USDT before the on-chain charge = after any top-up) / `balance.after` (USDT after the on-chain charge). Should satisfy `before − charged ≈ after`. |
+| `{initialUsdt}` | top-level `initialUsdt` from `prepare` output (wallet USDT before any funding this run; `prepare`-only) |
+| `{approveTx}` | top-level `approveTx` from `prepare` output (the on-chain approve tx hash; `null` ⇒ skip Approve row) |
 | `{amount}` | `withdrawn` field from `withdraw` output |
 
 ### Prohibited Deviations

@@ -1,6 +1,6 @@
 {
   "name": "@aeon-ai-pay/agentos",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "AEON AgentOS — platform-level execution system for AI Agents. Connects skill invocation, task execution, authorized payment and settlement. Currently open: AI image generation via x402 protocol with USDT on BSC.",
   "type": "module",
   "bin": {
