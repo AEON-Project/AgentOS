@@ -17,7 +17,7 @@ description: >
 emoji: "🤖"
 homepage: https://github.com/AEON-Project/AgentOS
 metadata:
-  version: "0.1.4"
+  version: "0.1.5"
   author: AEON-Project
   openclaw:
     requires:
@@ -69,7 +69,7 @@ All operations use the global command `agentos`.
 ```bash
 agentos setup --check                          # Pre-check / auto-create wallet
 agentos setup --show                           # Show configuration
-agentos prepare [--topup-amount <usdt>]        # Pre-flight (≥5 USDT + facilitator approve); also adds more funds when --topup-amount is supplied
+agentos prepare [--topup-amount <usdt>]        # Pre-flight (≥1 USDT + facilitator approve); also adds more funds (≥5 USDT) when --topup-amount is supplied
 agentos create-image --prompt "<text>"             # Generate AI image (x402-paid)
 agentos wallet                                 # Check local wallet balance
 agentos gas [--amount <bnb>]                   # Top up BNB for local wallet (WalletConnect, for withdraw)
@@ -109,7 +109,10 @@ CLI behavior:
 2. If `privateKey` is missing → generates a new private key locally with `viem.generatePrivateKey()` and saves it
 3. Returns JSON: `{ ready, created, mode, address, mainWallet, serviceUrl }`
 
-> 💰 **Pricing**: per-call USDT is decided by the x402 server (returned in the 402 response). The local session key always tops up in **whole-USDT tiers** — `5` / `20` / `50` (or a custom value), with a **5 USDT floor** (so a single funding lasts many image generations). When the per-call requirement exceeds 5 USDT, the floor automatically rises to cover it (e.g. an 8 USDT call would offer the `20` / `50` tiers only, plus custom ≥ 8). The CLI never asks the user to fund a "just enough" decimal like `0.0104`.
+> 💰 **Pricing**: per-call USDT is decided by the x402 server (returned in the 402 response). Two thresholds — keep them apart:
+>
+> - **Low-balance threshold = 1 USDT.** `prepare` only triggers a funding flow when the session key has < 1 USDT (≈ 50 image generations of headroom at current pricing). Above that, the wallet is treated as ready and the user is **not** asked to refund.
+> - **Top-up minimum = 5 USDT.** When a top-up *does* happen, the user picks from whole-USDT tiers `5` / `20` / `50` (or a custom value ≥ 5). A single funding lasts a long time; the CLI never asks for "just enough" decimals like `0.0104`. If a future per-call price ever exceeds 5 USDT, the floor automatically rises to cover it (e.g. an 8 USDT call would offer the `20` / `50` tiers only, plus custom ≥ 8).
 
 ### Output Templates
 
@@ -155,9 +158,9 @@ agentos prepare
 
 CLI behavior:
 1. Reads the session key balance and the USDT allowance to the x402 facilitator.
-2. **If balance ≥ 5 USDT and the facilitator is already approved (allowance > 0)** → exit `0` immediately with `{ "ready": true, ... }`. No QR, no user interaction.
+2. **If balance ≥ 1 USDT and the facilitator is already approved (allowance > 0)** → exit `0` immediately with `{ "ready": true, ... }`. No QR, no user interaction.
 3. **Otherwise** → trigger a single WalletConnect session and, in one user-confirmed flow:
-   - Transfer the chosen amount of USDT from the main wallet to the session key (only if balance < 5 USDT).
+   - Transfer the chosen amount of USDT from the main wallet to the session key (only if balance < 1 USDT). The user picks an amount ≥ 5 USDT (tiers `5` / `20` / `50` or custom).
    - Transfer 0.0003 BNB for approve gas (only if a fresh approve is needed and the session key has no BNB).
    - Session key broadcasts `ERC20.approve(facilitator, MaxUint256)` once → confirmed → `{ "ready": true, "approveTx": "0x..." }` on stdout.
 
@@ -185,7 +188,7 @@ Trigger: User wants to **generate / create / draw / render** an image.
 - If the user has not yet supplied a prompt, ask (verbatim):
   > What image would you like me to generate? Describe it in a sentence or two.
 - Once the user gives a prompt, **execute immediately** — no second confirmation needed. Proceed to 2.1.
-- Actual deduction per generation is decided by the x402 server (returned in the 402 response). Step 1.5 (`agentos prepare`) is supposed to have already brought the wallet to a "ready" state with ≥ 5 USDT and an unlimited approve, so most calls flow straight through. As a safety net, `create-image` re-checks balance internally and falls back into the same funding flow if the wallet somehow ended up short — using the same tiered top-up (`5` / `20` / `50` USDT or custom), with the floor raised to `requiredUsdt` if the per-call price ever exceeds 5 USDT.
+- Actual deduction per generation is decided by the x402 server (returned in the 402 response). Step 1.5 (`agentos prepare`) is supposed to have already brought the wallet to a "ready" state (balance ≥ 1 USDT + facilitator approved), so most calls flow straight through. As a safety net, `create-image` re-checks balance internally and falls back into the same funding flow if the wallet somehow ended up short — using the same tiered top-up (`5` / `20` / `50` USDT or custom), with the floor raised to `requiredUsdt` if the per-call price ever exceeds 5 USDT.
 
 ### 2.1 Execute Generation
 
@@ -331,8 +334,9 @@ In headless / agent mode (no TTY attached), when the session key cannot pay the 
 
 ```json
 {
-  "error": "USDT balance is below the 5 USDT minimum for this call. Choose a top-up amount and rerun with --topup-amount <usdt>.",
+  "error": "USDT balance is below the 1 USDT low-balance threshold; a top-up of ≥ 5 USDT is required. Choose an amount and rerun with --topup-amount <usdt>.",
   "code": "TOPUP_REQUIRED",
+  "threshold": 1,
   "minTopup": 5,
   "required": 0.1,
   "currentBalance": "0.0099",
@@ -504,7 +508,7 @@ Balance: {bnb} BNB
 | --- | --- |
 | Any first entry / uncertain state | `setup --check` |
 | View current config / wallet address | `setup --show` |
-| Pre-flight before generation (≥5 USDT + facilitator approve) | `prepare` |
+| Pre-flight before generation (≥1 USDT + facilitator approve) | `prepare` |
 | Generate AI image | `create-image --prompt "<text>"` |
 | Session key USDT insufficient, top up | `prepare --topup-amount <n>` |
 | Check local wallet balance | `wallet` |

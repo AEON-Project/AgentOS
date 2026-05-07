@@ -4,7 +4,7 @@
 
 1. Wallet is configured — run `setup --check` first.
 2. Service URL is configured (built-in default is available).
-3. `agentos prepare` should already have funded the session key (≥ 5 USDT, facilitator approved) before `create-image`. As a safety net, `create-image` re-checks allowance/balance and falls back into the same funding flow if anything is missing.
+3. `agentos prepare` should already have brought the session key to a ready state (balance ≥ 1 USDT, facilitator approved) before `create-image`. As a safety net, `create-image` re-checks allowance/balance and falls back into the same funding flow if anything is missing — the top-up minimum is still 5 USDT.
 
 ## Request Shape
 

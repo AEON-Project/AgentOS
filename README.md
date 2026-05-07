@@ -22,8 +22,8 @@ Supported agents: Claude Code, Cursor, Codex, OpenClaw, Gemini CLI, GitHub Copil
 # First run: auto-create local wallet (private key generated locally, never uploaded)
 npx @aeon-ai-pay/agentos setup --check
 
-# Pre-flight: ensure the session key has >= 5 USDT and an unlimited approve to the
-# facilitator. Triggers a WalletConnect QR (1 confirmation) only if needed.
+# Pre-flight: ensure the session key has >= 1 USDT and an unlimited approve to the
+# facilitator. If a top-up is needed, you fund >= 5 USDT (one-time WalletConnect QR scan).
 npx @aeon-ai-pay/agentos prepare
 
 # Generate an image. With prepare done, this is a gasless EIP-712 signature only.
@@ -71,9 +71,10 @@ npx @aeon-ai-pay/agentos clean
 ```
 1. CLI auto-generates a session key (disposable wallet) locally
 2. `prepare` does the up-front money work in one WalletConnect session:
-   - If balance < 5 USDT, transfers your chosen tier (5 / 20 / 50 USDT or custom ≥ 5) from main wallet to session key
-   - If a fresh approve is needed, also transfers 0.0003 BNB for gas, then session key broadcasts `ERC20.approve(facilitator, MaxUint256)`
-   - When invoked headlessly (e.g. by an agent), pass `--topup-amount <usdt>`; otherwise the CLI exits with `TOPUP_REQUIRED` so the agent can ask the user to choose
+   - Triggers only when the session key has < 1 USDT (≈ 50 image generations of headroom) or has not yet approved the facilitator. Above that threshold it's a no-op.
+   - When triggered, you pick a top-up tier (5 / 20 / 50 USDT or custom ≥ 5) — the **minimum is 5 USDT** so a single funding lasts a long time.
+   - If a fresh approve is needed, also transfers 0.0003 BNB for gas, then session key broadcasts `ERC20.approve(facilitator, MaxUint256)`.
+   - When invoked headlessly (e.g. by an agent), pass `--topup-amount <usdt>`; otherwise the CLI exits with `TOPUP_REQUIRED` so the agent can ask the user to choose.
 3. After `prepare`, every `create-image` is a single gasless EIP-712 signature — no further wallet interaction
 4. Server returns the generated image (URLs); CLI downloads each, reads dimensions/size
 
