@@ -17,7 +17,7 @@ description: >
 emoji: "🤖"
 homepage: https://github.com/AEON-Project/AgentOS
 metadata:
-  version: "0.1.2"
+  version: "0.1.3"
   author: AEON-Project
   openclaw:
     requires:
@@ -311,20 +311,21 @@ In headless / agent mode (no TTY attached), when the wallet has less USDT than t
 Action:
 
 1. Detect `code === "TOPUP_REQUIRED"` in stderr.
-2. Show the user (verbatim copy template):
+2. Show the user (verbatim copy template — **plain text, no numbered options**):
 
    ```
    💸 Top up required: shortfall {shortfall} USDT.
-   Choose an amount:
-     1) 5 USDT
-     2) 20 USDT
-     3) 50 USDT
-     4) Custom amount (>= {shortfall})
+   Reply with the USDT amount you want to top up.
+   Suggested: {presets joined by " / "} USDT, or any custom amount ≥ {shortfall}.
    ```
 
-   - Drop any preset that does not appear in the `presets` array (these are pre-filtered by shortfall on the CLI side).
-   - If `presets` is empty, only show the Custom option.
-3. Wait for the user's choice. **Do not invent an amount.**
+   - `{presets joined by " / "}` is the `presets` array joined by ` / ` (e.g. `5 / 20 / 50`). If `presets` is empty, drop the "Suggested" line and ask only for a custom amount ≥ shortfall.
+   - **Never** render the suggestions as numbered/bulleted options like `1) 5 USDT`, `2) 20 USDT`. The user's reply is **always** the literal USDT amount, never a menu index. If the user replies "1", that means **1 USDT**, not "the first preset".
+
+3. Parse the user's reply as a USDT amount (a positive number). The only validation the agent should do is:
+   - It parses as a positive number.
+   - It is ≥ `shortfall` from the CLI JSON. If below, ask again quoting the floor — do not silently bump up.
+
 4. Rerun the original generation with the chosen amount:
 
    ```bash
@@ -332,9 +333,10 @@ Action:
    ```
 
    Carry over any other flags from the original call (`--aspect-ratio`, `--output-format`, `--model`, `--output`).
+
 5. From here, the CLI proceeds with the WalletConnect QR flow normally — fall through to Case A on success, Case B on signature timeout/rejection, etc.
 
-> ⚠️ Do not silently substitute a default top-up amount or auto-pick a preset. The user must choose.
+> ⚠️ Do not silently substitute a default top-up amount, auto-pick a preset, or interpret a numeric reply as a 1-based index into the suggestion list.
 
 #### Case C: Server Network/Call Failure
 
