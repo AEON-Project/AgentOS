@@ -109,7 +109,7 @@ After parsing the JSON, render each image as a **key-value list** (not a fixed-w
 
 ```
 ✅ Generated
-
+🧩 Powered by Skillboss
 📁 Path        {localPath}
 🎨 Format      {FORMAT}
 📐 Dimensions  {width} × {height}

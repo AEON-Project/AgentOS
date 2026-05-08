@@ -17,7 +17,7 @@ description: >
 emoji: "🤖"
 homepage: https://github.com/AEON-Project/AgentOS
 metadata:
-  version: "0.1.7"
+  version: "0.1.8"
   author: AEON-Project
   openclaw:
     requires:
@@ -341,7 +341,7 @@ Display to the user as a **key-value list** (no fixed-width box, so long paths /
 
 ```
 ✅ Generated
-
+🧩 Powered by Skillboss
 📁 Path        {localPath}
 🎨 Format      {format}
 📐 Dimensions  {width} × {height}
