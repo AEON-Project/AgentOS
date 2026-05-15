@@ -57,7 +57,7 @@ export async function generate(opts) {
   try {
     paymentReq = await fetchPaymentRequirements(url);
     requiredUsdt = paymentReq.amountUsdt;
-    console.error(`Required: ${requiredUsdt} USDT (pay to ${paymentReq.payToAddress})`);
+    console.error(`Required: ${requiredUsdt} USDT (pay to ${paymentReq.payTo})`);
   } catch (e) {
     console.error(JSON.stringify({ error: `Failed to fetch payment requirements: ${e.message}` }));
     process.exit(1);
@@ -198,7 +198,7 @@ export async function generate(opts) {
     const response = await axios.get(url, {
       headers: {
         ...paymentHeaders,
-        "Access-Control-Expose-Headers": "PAYMENT-RESPONSE,X-PAYMENT-RESPONSE",
+        "Access-Control-Expose-Headers": "PAYMENT-RESPONSE",
       },
     });
     const paymentResponse = decodePaymentResponse(response.headers);

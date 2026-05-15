@@ -17,7 +17,7 @@ description: >
 emoji: "🤖"
 homepage: https://github.com/AEON-Project/AgentOS
 metadata:
-  version: "0.1.9"
+  version: "0.2.0"
   author: AEON-Project
   openclaw:
     requires:

@@ -76,14 +76,14 @@ export async function fetchPaymentRequirements(url) {
     const accept = data?.accepts?.[0];
     if (!accept) throw new Error("No payment requirements in 402 response");
     const decimals = accept.tokenDecimals || 18;
-    const amountWei = BigInt(accept.maxAmountRequired || accept.amountRequired);
+    const amountWei = BigInt(accept.amount);
     const amountUsdt = parseFloat(formatUnits(amountWei, decimals));
     return {
       amountUsdt,
       amountWei: amountWei.toString(),
       decimals,
-      tokenAddress: accept.tokenAddress,
-      payToAddress: accept.payToAddress,
+      asset: accept.asset,
+      payTo: accept.payTo,
       orderNo: data.orderNo || null,
       raw402Response: err.response,
       requestConfig: err.config,
@@ -92,16 +92,12 @@ export async function fetchPaymentRequirements(url) {
 }
 
 /**
- * Decode PAYMENT-RESPONSE header from axios response headers
+ * Decode PAYMENT-RESPONSE header from axios response headers (x402 v2)
  * @param {object} headers - axios response headers
  * @returns {object|null}
  */
 export function decodePaymentResponse(headers) {
-  const raw =
-    headers["payment-response"] ||
-    headers["PAYMENT-RESPONSE"] ||
-    headers["x-payment-response"] ||
-    headers["X-PAYMENT-RESPONSE"];
+  const raw = headers["payment-response"] || headers["PAYMENT-RESPONSE"];
   if (!raw) return null;
   try {
     return JSON.parse(Buffer.from(raw, "base64").toString("utf-8"));
